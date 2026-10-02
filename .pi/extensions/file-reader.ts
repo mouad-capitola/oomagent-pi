@@ -1,6 +1,6 @@
 import { constants } from "node:fs";
 import { open, realpath } from "node:fs/promises";
-import { extname, isAbsolute, relative, resolve, sep } from "node:path";
+import { extname, isAbsolute, relative, resolve, sep, win32 } from "node:path";
 import { Type } from "@earendil-works/pi-ai";
 import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
@@ -9,7 +9,12 @@ function isWithin(root: string, target: string): boolean {
   return path !== ".." && !path.startsWith(`..${sep}`) && !isAbsolute(path);
 }
 
-function parseCsv(text: string) {
+export const MAX_FILE_BYTES = 1024 * 1024;
+
+type CsvData = { columns: string[]; rows: Record<string, string>[] };
+type TextEncoding = "utf-8" | "utf-16le" | "utf-16be";
+
+function parseCsv(text: string): CsvData {
   const records: string[][] = [];
   let row: string[] = [];
   let field = "";
@@ -72,33 +77,14 @@ function parseCsv(text: string) {
   return { columns, rows };
 }
 
-export default function (pi: ExtensionAPI) {
-  pi.registerTool(defineTool({
-    name: "file_reader",
-    label: "File reader",
-    description: "Read .txt as UTF-8 text or comma-delimited .csv as JSON with columns and rows. CSV uses the first row as unique column names; values remain strings and blank lines are skipped. Paths are relative to Pi's working directory; outside-project paths are blocked.",
-    parameters: Type.Object({
-      file_path: Type.String({ description: "File path relative to the current project root", minLength: 1 }),
-    }, { additionalProperties: false }),
-    annotations: {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
-    async execute(_toolCallId, { file_path }, signal, _onUpdate, ctx) {
-      if (isAbsolute(file_path) || file_path.includes("\0") || file_path.split(/[\\/]/).includes("..")) {
+export async function readProjectFile(cwd: string, file_path: string, signal?: AbortSignal) {
+      if (!file_path || isAbsolute(file_path) || win32.isAbsolute(file_path) || file_path.includes("\0") || file_path.split(/[\\/]/).includes("..")) {
         throw new Error("file_reader: file_path must be relative to the project root and must not contain '..' or null bytes.");
-      }
-
-      const format = extname(file_path).toLowerCase();
-      if (format !== ".txt" && format !== ".csv") {
-        throw new Error("file_reader: only .txt and .csv files are supported.");
       }
 
       try {
         signal?.throwIfAborted();
-        const root = await realpath(ctx.cwd);
+        const root = await realpath(cwd);
         const candidate = resolve(root, file_path);
         if (!isWithin(root, candidate)) {
           throw new Error("file_reader: path is outside the project directory.");
@@ -118,12 +104,34 @@ export default function (pi: ExtensionAPI) {
           if (!stat.isFile()) {
             throw new Error(`file_reader: '${file_path}' is not a regular text file.`);
           }
-          const bytes = await handle.readFile({ signal });
+          const format = extname(file_path).toLowerCase();
+          if (format !== ".txt" && format !== ".csv") {
+            throw new Error("file_reader: only .txt and .csv files are supported.");
+          }
+          if (stat.size > MAX_FILE_BYTES) {
+            throw new Error("file_reader: file exceeds the 1 MiB size limit.");
+          }
+          // Bounded reading also catches a file growing after stat().
+          const buffer = Buffer.alloc(MAX_FILE_BYTES + 1);
+          let count = 0;
+          while (count < buffer.length) {
+            signal?.throwIfAborted();
+            const { bytesRead } = await handle.read(buffer, count, buffer.length - count, count);
+            if (!bytesRead) break;
+            count += bytesRead;
+          }
+          if (count > MAX_FILE_BYTES) throw new Error("file_reader: file exceeds the 1 MiB size limit.");
+          const bytes = buffer.subarray(0, count);
+          const encoding: TextEncoding = bytes[0] === 0xff && bytes[1] === 0xfe ? "utf-16le"
+            : bytes[0] === 0xfe && bytes[1] === 0xff ? "utf-16be" : "utf-8";
           let text: string;
           try {
-            text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+            text = new TextDecoder(encoding, { fatal: true }).decode(bytes);
           } catch {
-            throw new Error(`file_reader: '${file_path}' is not valid UTF-8 text.`);
+            throw new Error(`file_reader: invalid ${encoding} encoding; use UTF-8 or UTF-16 with BOM.`);
+          }
+          if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(text)) {
+            throw new Error("file_reader: binary content detected; only text files are supported.");
           }
           const csv = format === ".csv" ? parseCsv(text) : undefined;
           return {
@@ -133,6 +141,7 @@ export default function (pi: ExtensionAPI) {
               resolvedPath,
               sizeBytes: bytes.byteLength,
               format: format.slice(1),
+              encoding,
               ...(csv ? { columns: csv.columns, rows: csv.rows, rowCount: csv.rows.length } : {}),
             },
           };
@@ -145,12 +154,27 @@ export default function (pi: ExtensionAPI) {
         if (code === "ENOENT") {
           throw new Error(`file_reader: file '${file_path}' does not exist.`);
         }
+        if (code === "ENOTDIR") throw new Error("file_reader: a parent path is not a directory.");
+        if (code === "ELOOP") throw new Error("file_reader: symlink loop or changed symlink detected.");
         if (code === "EACCES" || code === "EPERM") {
           throw new Error(`file_reader: permission denied reading '${file_path}'.`);
         }
         if (error instanceof Error && error.message.startsWith("file_reader:")) throw error;
         throw new Error(`file_reader: cannot read '${file_path}': ${error instanceof Error ? error.message : String(error)}`);
       }
+}
+
+export default function (pi: ExtensionAPI) {
+  pi.registerTool(defineTool({
+    name: "file_reader",
+    label: "File reader",
+    description: "Read project-relative .txt or comma-delimited .csv files up to 1 MiB. Supports strict UTF-8 and BOM-marked UTF-16. CSV uses unique header names and returns columns/rows. Blocks traversal, outside-project symlinks, directories, and binary content. Project root is Pi's working directory.",
+    parameters: Type.Object({
+      file_path: Type.String({ minLength: 1, description: "File path relative to the project root" }),
+    }, { additionalProperties: false }),
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    async execute(_id, { file_path }, signal, _update, ctx) {
+      return readProjectFile(ctx.cwd, file_path, signal);
     },
   }));
 }
