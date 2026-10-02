@@ -6,12 +6,14 @@
   "type": "module",
   "keywords": ["pi-package"],
   "pi": {
-    "extensions": ["./.pi/extensions/oomagent-tools.ts"],
+    "extensions": ["./.pi/extensions/oomagent-tools.ts", "./.pi/extensions/oomagent-ui.ts"],
+    "themes": ["./.pi/themes/oomagent-swiss.json"],
     "skills": ["./.pi/skills"],
     "prompts": ["./.pi/prompts"]
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
-    "@earendil-works/pi-coding-agent": "*"
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
   }
 }

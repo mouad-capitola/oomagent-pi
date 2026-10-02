@@ -1,3 +1,5 @@
 {
-  "defaultTools": ["+grep", "+find", "+ls", "+codemode", "+tool_search"]
+  "defaultTools": ["+grep", "+find", "+ls", "+codemode", "+tool_search"],
+  "theme": "oomagent-swiss",
+  "tuiMode": "fullscreen"
 }

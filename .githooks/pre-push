@@ -1,0 +1,4 @@
+#!/bin/sh
+# Git supplies the outgoing ref updates on stdin.
+root=$(git rev-parse --show-toplevel) || exit 1
+exec node "$root/scripts/git-preflight.mjs" pre-push

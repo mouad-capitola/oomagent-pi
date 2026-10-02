@@ -1,0 +1,4 @@
+#!/bin/sh
+# Local OomAgent gate: never fixes, stages, commits or pushes files.
+root=$(git rev-parse --show-toplevel) || exit 1
+exec node "$root/scripts/git-preflight.mjs" pre-commit
