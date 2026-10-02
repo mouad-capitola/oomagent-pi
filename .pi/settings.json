@@ -1,0 +1,3 @@
+{
+  "defaultTools": ["+grep", "+find", "+ls", "+codemode", "+tool_search"]
+}

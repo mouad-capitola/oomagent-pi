@@ -1,0 +1,17 @@
+{
+  "name": "oomagent-pi",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Shared Oomagent Pi configuration",
+  "type": "module",
+  "keywords": ["pi-package"],
+  "pi": {
+    "extensions": ["./.pi/extensions/oomagent-tools.ts"],
+    "skills": ["./.pi/skills"],
+    "prompts": ["./.pi/prompts"]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*"
+  }
+}
