@@ -1,12 +1,67 @@
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { CustomEditor, type ExtensionAPI, type ExtensionContext, type Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
+const execFileAsync = promisify(execFile);
+const OWN_EXTENSION_DIR = dirname(fileURLToPath(import.meta.url));
 const BRAND = "OomAgent-Mouad";
 const FRAMES = ["◌", "◎", "◉", "◎"];
 type Ink = "text" | "muted" | "accent" | "success" | "error";
 
 function fit(text: string, width: number): string {
   return truncateToWidth(text, Math.max(0, width), "");
+}
+
+type FooterGitStatus = {
+  branch: string;
+  changed: number;
+  staged: number;
+  untracked: number;
+  conflicts: number;
+  ahead: number | null;
+  behind: number | null;
+};
+
+export function parseFooterGitStatus(output: string): FooterGitStatus {
+  const records = output.split("\0");
+  const status: FooterGitStatus = { branch: "", changed: 0, staged: 0, untracked: 0, conflicts: 0, ahead: null, behind: null };
+  for (let i = 0; i < records.length; i++) {
+    const record = records[i];
+    if (!record) continue;
+    if (record.startsWith("# branch.head ")) {
+      status.branch = record.slice(14);
+    } else if (record.startsWith("# branch.ab ")) {
+      const match = /^# branch\.ab \+(\d+) -(\d+)$/.exec(record);
+      if (!match) throw new Error("Invalid Git branch counts");
+      status.ahead = Number(match[1]);
+      status.behind = Number(match[2]);
+    } else if (record.startsWith("? ")) {
+      status.changed++;
+      status.untracked++;
+    } else if (/^[12u] /.test(record)) {
+      const xy = record.slice(2, 4);
+      status.changed++;
+      if (record.startsWith("u ")) status.conflicts++;
+      else if (xy[0] !== ".") status.staged++;
+      // Rename/copy records include a second NUL-delimited original filename.
+      if (record.startsWith("2 ") && !records[++i]) throw new Error("Incomplete Git rename record");
+    } else if (!record.startsWith("# ") && !record.startsWith("! ")) {
+      throw new Error("Invalid Git status record");
+    }
+  }
+  if (!status.branch) throw new Error("Missing Git branch header");
+  return status;
+}
+
+export async function readFooterGitStatus(cwd: string, signal?: AbortSignal): Promise<FooterGitStatus> {
+  const { stdout } = await execFileAsync("git", ["--no-pager", "status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all"], {
+    cwd, signal, timeout: 3000, maxBuffer: 4 * 1024 * 1024,
+    env: { ...process.env, LC_ALL: "C", GIT_OPTIONAL_LOCKS: "0" },
+  });
+  return parseFooterGitStatus(stdout);
 }
 
 export function sceneLines(frame: number): { text: string; ink: Ink }[][] {
@@ -68,20 +123,49 @@ class RedEditor extends CustomEditor {
 
 export default function (pi: ExtensionAPI) {
   let footerEnabled = true;
+  let disposeFooter: (() => void) | undefined;
   const installFooter = (ctx: ExtensionContext) => {
+    disposeFooter?.();
     ctx.ui.setFooter(footerEnabled ? (tui, _theme, data) => {
-      const unsubscribe = data.onBranchChange(() => tui.requestRender());
-      // Tool registrations and idle state can change even with animation paused.
-      const timer = setInterval(() => tui.requestRender(), 1000);
-      timer.unref();
       let disposed = false;
+      let pending = false;
+      let gitStatus: FooterGitStatus | null | undefined;
+      const controller = new AbortController();
+      const refreshGit = async () => {
+        if (disposed || pending) return;
+        pending = true;
+        try {
+          const status = await readFooterGitStatus(ctx.cwd, controller.signal);
+          if (!disposed) gitStatus = status;
+        } catch {
+          if (!disposed) gitStatus = null;
+        } finally {
+          pending = false;
+          if (!disposed) tui.requestRender();
+        }
+      };
+      const unsubscribe = data.onBranchChange(() => {
+        gitStatus = undefined;
+        void refreshGit();
+        tui.requestRender();
+      });
+      // Git I/O happens asynchronously outside render; overlapping reads are skipped.
+      const timer = setInterval(() => {
+        void refreshGit();
+        tui.requestRender();
+      }, 1000);
+      timer.unref();
+      void refreshGit();
+      const dispose = () => {
+        if (disposed) return;
+        disposed = true;
+        clearInterval(timer);
+        controller.abort();
+        unsubscribe();
+      };
+      disposeFooter = dispose;
       return {
-        dispose() {
-          if (disposed) return;
-          disposed = true;
-          clearInterval(timer);
-          unsubscribe();
-        },
+        dispose,
         invalidate() {},
         render(width: number): string[] {
           const theme = ctx.ui.theme;
@@ -89,20 +173,36 @@ export default function (pi: ExtensionAPI) {
             const fitted = fit(line, width);
             return theme.bg("userMessageBg", fitted + " ".repeat(Math.max(0, width - visibleWidth(fitted))));
           };
-          const branch = data.getGitBranch() ?? "geen branch";
+          const branch = gitStatus
+            ? (gitStatus.branch === "(detached)" ? "detached HEAD" : gitStatus.branch)
+            : (data.getGitBranch() ?? "geen branch");
+          const changes = gitStatus
+            ? (gitStatus.changed === 0
+              ? theme.fg("success", " ✓")
+              : theme.fg("accent", ` ●${gitStatus.changed} (${gitStatus.staged} staged${gitStatus.untracked ? `, ${gitStatus.untracked} nieuw` : ""}${gitStatus.conflicts ? `, ${gitStatus.conflicts} conflict` : ""})`))
+            : theme.fg("muted", gitStatus === undefined ? " …" : " Git ?");
+          const sync = gitStatus && gitStatus.branch !== "(detached)"
+            ? (gitStatus.ahead === null
+              ? theme.fg("muted", " · geen upstream")
+              : theme.fg("accent", ` ↑${gitStatus.ahead} ↓${gitStatus.behind}`))
+            : "";
           const activeTools = new Set(pi.getActiveTools());
           // Deferred/codemode tools remain callable without being active.
-          const toolCount = pi.getAllTools().filter(tool =>
+          const availableTools = pi.getAllTools().filter(tool =>
             tool.exposure !== "hidden" && (
               activeTools.has(tool.name) || tool.exposure === "codemode" || tool.exposure === "deferred"
             )
+          );
+          const ownToolCount = availableTools.filter(tool =>
+            dirname(resolve(ctx.cwd, tool.sourceInfo.path)) === OWN_EXTENSION_DIR
           ).length;
           const idle = ctx.isIdle();
           const separator = theme.fg("muted", " | ");
           const line = [
             theme.fg("success", "π OomAgent"),
-            theme.fg("muted", branch),
-            theme.fg("accent", `${toolCount} tools`),
+            theme.fg("muted", branch) + changes + sync,
+            theme.fg("accent", `${ownToolCount} eigen`),
+            theme.fg("accent", `${availableTools.length} totaal`),
             theme.fg(idle ? "success" : "accent", idle ? "Ready ✓" : "Working…"),
           ].join(separator);
           return [paint(line)];
@@ -199,6 +299,8 @@ export default function (pi: ExtensionAPI) {
     redraw?.();
   });
   pi.on("session_shutdown", () => {
+    disposeFooter?.();
+    disposeFooter = undefined;
     disposeHeader?.();
     disposeHeader = undefined;
     redraw = undefined;
