@@ -12,15 +12,19 @@ Start Pi from this repository and approve project trust after reviewing the conf
 
 Pi loads the TypeScript extensions directly and supplies their peer dependencies; no build step is needed.
 
-## OomAgent-Mouad interface
+## OomAgent interface
 
-The `oomagent-swiss` theme and `.pi/extensions/oomagent-ui.ts` add a Swiss Alps welcome scene with an animated waterfall and multiverse ring. After the first message the large scene collapses; a compact animated brand remains beside the editor.
+The `oomagent-swiss` theme and `.pi/extensions/oomagent-ui.ts` provide a professional dark workspace: a compact OomAgent header, turquoise accents, slate panels, a subtle user divider and a turquoise assistant divider. The existing theme name is kept for compatibility. Tools and MCP configuration are unchanged.
+
+The footer has two compact lines: Git/tool/activity status, followed by context usage, project name, model and other extensions' status messages. Unknown context usage is shown as `—`, not zero. Context turns amber at 75% and red at 90%. Long lines are truncated to terminal width, including ANSI and wide characters. Data is refreshed while idle as well as during work.
+
+The large Swiss Alps scene remains optional; both the scene and animation are off by default.
 
 - `/oom-screen`: show/hide the large welcome scene (also useful after `/reload`).
 - `/oom-motion`: pause/resume animation.
-- `/oom-footer`: toggle the compact black footer (`π OomAgent | <branch> | <eigen> eigen | <totaal> totaal | Ready ✓`) or restore Pi’s default footer. The Git segment shows the branch, `✓` for a clean working tree or `●N` for the number of files still to commit (including staged, unstaged and untracked files, counting each file once). It also shows the staged subset, new files and conflicts where applicable. `↑N ↓N` are commits ahead of/behind the configured upstream based on local refs; no network fetch is performed. Without an upstream it says `geen upstream`; detached HEAD omits sync counts. Git reads run asynchronously with a three-second timeout, outside rendering; unavailable status shows `Git ?`, not a misleading clean state. The tool count includes active tools plus callable codemode/deferred tools, excluding hidden and inactive direct/model-only tools. The own-tool count is the available subset whose source file is in this package’s `.pi/extensions/` directory; both counts use runtime metadata, not fixed tool names or numbers. Values are read on each render, with a one-second refresh even when animation is paused. While the agent works, status is `Working…`; without a branch it shows `geen branch`.
-- Your editor and message dividers are red; assistant message dividers are green. Markdown remains intact. These are top/bottom dividers, not full native message boxes.
-- UI panels are black. Set your terminal profile's background to black as well for an entirely black viewport; the extension does not change global terminal preferences.
+- `/oom-footer`: toggle the compact two-line footer (`π OomAgent | <branch> | <eigen> eigen | <totaal> totaal | Ready ✓`) or restore Pi’s default footer. The Git segment shows the branch, `✓` for a clean working tree or `●N` for the number of files still to commit (including staged, unstaged and untracked files, counting each file once). It also shows the staged subset, new files and conflicts where applicable. `↑N ↓N` are commits ahead of/behind the configured upstream based on local refs; no network fetch is performed. Without an upstream it says `geen upstream`; detached HEAD omits sync counts. Git reads run asynchronously with a three-second timeout, outside rendering; unavailable status shows `Git ?`, not a misleading clean state. The tool count includes active tools plus callable codemode/deferred tools, excluding hidden and inactive direct/model-only tools. The own-tool count is the available subset whose source file is in this package’s `.pi/extensions/` directory; both counts use runtime metadata, not fixed tool names or numbers. Values are read on each render, with a one-second refresh even when animation is paused. While the agent works, status is `Working…`; without a branch it shows `geen branch`.
+- The editor uses turquoise borders. Markdown remains intact; message borders are top/bottom dividers, not full native message boxes.
+- For a matching full viewport, set your terminal profile's background to `#0b121c`. The theme colors panels but does not change global terminal preferences.
 - UI customization runs only in interactive terminal mode, not RPC/print mode. Timers are cleaned up on disposal and session shutdown.
 
 ## Local commit and push checks

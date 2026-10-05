@@ -1,14 +1,13 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { dirname, resolve } from "node:path";
+import { basename, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CustomEditor, type ExtensionAPI, type ExtensionContext, type Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
 const execFileAsync = promisify(execFile);
 const OWN_EXTENSION_DIR = dirname(fileURLToPath(import.meta.url));
-const BRAND = "OomAgent-Mouad";
-const FRAMES = ["◌", "◎", "◉", "◎"];
+const BRAND = "OomAgent";
 type Ink = "text" | "muted" | "accent" | "success" | "error";
 
 function fit(text: string, width: number): string {
@@ -113,10 +112,10 @@ export function messageBorder(label: string, width: number, bottom = false): str
   return `╭${title}${"─".repeat(Math.max(0, width - visibleWidth(title) - 2))}╮`;
 }
 
-class RedEditor extends CustomEditor {
-  redBorder?: (text: string) => string;
+class BrandEditor extends CustomEditor {
+  brandBorder?: (text: string) => string;
   override render(width: number): string[] {
-    if (this.redBorder) this.borderColor = this.redBorder;
+    if (this.brandBorder) this.borderColor = this.brandBorder;
     return super.render(width);
   }
 }
@@ -205,15 +204,30 @@ export default function (pi: ExtensionAPI) {
             theme.fg("accent", `${availableTools.length} totaal`),
             theme.fg(idle ? "success" : "accent", idle ? "Ready ✓" : "Working…"),
           ].join(separator);
-          return [paint(line)];
+          const usage = ctx.getContextUsage();
+          const percent = usage?.percent;
+          const contextLabel = percent != null && Number.isFinite(percent)
+            ? `Context ${Math.round(percent)}%`
+            : "Context —";
+          const contextColor = percent != null && percent >= 90 ? "error"
+            : percent != null && percent >= 75 ? "warning" : "muted";
+          const model = ctx.model?.id ?? "geen model";
+          // Put context before long names so it remains visible on narrow terminals.
+          const details = [
+            theme.fg(contextColor, contextLabel),
+            theme.fg("text", basename(ctx.cwd) || ctx.cwd),
+            theme.fg("accent", model),
+          ].join(separator);
+          const statuses = [...data.getExtensionStatuses().values()].join(separator);
+          return [paint(line), paint(details + (statuses ? separator + statuses : ""))];
         },
       };
     } : undefined);
   };
 
   let active = false;
-  let splash = true;
-  let motion = true;
+  let splash = false;
+  let motion = false;
   let frame = 0;
   let disposeHeader: (() => void) | undefined;
   let redraw: (() => void) | undefined;
@@ -224,8 +238,8 @@ export default function (pi: ExtensionAPI) {
     const width = Math.max(0, Math.min(context.availableWidth, 110));
     const user = context.messageType === "user";
     const theme = currentTheme();
-    const color = user ? "error" : "success";
-    const top = theme.fg(color, messageBorder(user ? "Mouad" : "OomAgent", width));
+    const color = user ? "borderMuted" : "accent";
+    const top = theme.fg(color, messageBorder(user ? "Mouad" : "pi-Oomagent", width));
     // Leave streaming content untouched below the heading until it completes.
     const bottom = context.isStreaming ? "" : `\n\n${theme.fg(color, messageBorder("", width, true))}`;
     return `${top}\n\n${markdown}${bottom}`;
@@ -236,13 +250,13 @@ export default function (pi: ExtensionAPI) {
     active = true;
     installFooter(ctx);
     currentTheme = () => ctx.ui.theme;
-    splash = true;
+    splash = false;
     const selected = ctx.ui.setTheme("oomagent-swiss");
     if (!selected.success) ctx.ui.notify(selected.error || "Oomagent theme could not be loaded.", "warning");
     ctx.ui.setTitle(BRAND);
     ctx.ui.setEditorComponent((tui, theme, keys) => {
-      const editor = new RedEditor(tui, theme, keys);
-      editor.redBorder = text => ctx.ui.theme.fg("error", text);
+      const editor = new BrandEditor(tui, theme, keys);
+      editor.brandBorder = text => ctx.ui.theme.fg("accent", text);
       return editor;
     });
     ctx.ui.setHeader(tui => {
@@ -250,7 +264,7 @@ export default function (pi: ExtensionAPI) {
       let disposed = false;
       redraw = () => tui.requestRender();
       const timer = setInterval(() => {
-        if (motion && !disposed) { frame++; tui.requestRender(); }
+        if (motion && splash && !disposed) { frame++; tui.requestRender(); }
       }, 200);
       timer.unref();
       const dispose = () => {
@@ -266,7 +280,10 @@ export default function (pi: ExtensionAPI) {
           const theme = ctx.ui.theme;
           const paint = (text: string) => theme.bg("userMessageBg", fit(text, width));
           if (!splash || width < 48) {
-            return [paint(theme.fg("success", `${FRAMES[frame % FRAMES.length]} ${BRAND}`))];
+            return [
+              paint(theme.bold(theme.fg("accent", `◈ ${BRAND}`)) + theme.fg("muted", "  /  coding workspace")),
+              paint(theme.fg("muted", "Stel een vraag of geef een opdracht · /help")),
+            ];
           }
           const scene = sceneLines(frame);
           const sceneWidth = Math.min(width, 64);
@@ -279,19 +296,8 @@ export default function (pi: ExtensionAPI) {
         },
       };
     });
-    // This widget stays next to the editor even after the startup header scrolls away.
-    ctx.ui.setWidget("oomagent-multiverse", () => ({
-      invalidate() {},
-      render(width: number): string[] {
-        const theme = ctx.ui.theme;
-        const line = theme.fg("accent", `${FRAMES[frame % FRAMES.length]} `)
-          + theme.fg("text", BRAND)
-          + theme.fg("error", "  Mouad")
-          + theme.fg("muted", " → ")
-          + theme.fg("success", "OomAgent");
-        return [theme.bg("userMessageBg", fit(line, width))];
-      },
-    }));
+    // Remove the legacy animated widget; branding now lives in the compact header.
+    ctx.ui.setWidget("oomagent-multiverse", undefined);
   });
 
   pi.on("before_agent_start", () => {

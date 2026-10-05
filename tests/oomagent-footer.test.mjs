@@ -6,7 +6,7 @@ import { promisify } from "node:util";
 import { tmpdir } from "node:os";
 import { createRequire, stripTypeScriptTypes } from "node:module";
 import { pathToFileURL, fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 // Resolve the host-supplied peer from Pi's dependency tree.
 const require = createRequire(import.meta.resolve("@earendil-works/pi-coding-agent"));
@@ -47,6 +47,7 @@ await test("footer dynamically renders branch, available tools and status; toggl
   });
   let factory;
   let idle = true;
+  let usage = { percent: 42, tokens: 42000, contextWindow: 100000 };
   let branch = "main";
   const colors = new Map();
   const backgrounds = [];
@@ -54,6 +55,8 @@ await test("footer dynamically renders branch, available tools and status; toggl
     mode: "tui", hasUI: true,
     cwd: dirname(dirname(ownDir.replace(/\/$/, ""))),
     isIdle: () => idle,
+    model: { id: "test-model" },
+    getContextUsage: () => usage,
     ui: {
       theme: {
         fg: (color, text) => { colors.set(text, color); return text; },
@@ -69,11 +72,24 @@ await test("footer dynamically renders branch, available tools and status; toggl
   let branchChanged;
   const makeFooter = () => factory({ requestRender: () => redraws++ }, ctx.ui.theme, {
     getGitBranch: () => branch,
+    getExtensionStatuses: () => new Map([["test", "extension-status"]]),
     onBranchChange: fn => { branchChanged = fn; return () => disposed++; },
   });
   const footer = makeFooter();
   try {
-    assert.deepEqual(footer.render(80).map(line => line.trimEnd()), ["π OomAgent | main … | 2 eigen | 7 totaal | Ready ✓"]);
+    assert.equal(footer.render(80)[0].trimEnd(), "π OomAgent | main … | 2 eigen | 7 totaal | Ready ✓");
+    assert.equal(footer.render(120)[1].trimEnd(), `Context 42% | ${basename(ctx.cwd)} | test-model | extension-status`);
+    usage = undefined;
+    assert.match(footer.render(120)[1], /Context —/);
+    usage = { percent: null, tokens: null, contextWindow: 100000 };
+    assert.match(footer.render(120)[1], /Context —/);
+    usage.percent = 80;
+    footer.render(120);
+    assert.equal(colors.get("Context 80%"), "warning");
+    usage.percent = 95;
+    footer.render(120);
+    assert.equal(colors.get("Context 95%"), "error");
+    usage.percent = 42;
     await flush();
     assert.match(footer.render(120)[0], /main ✓ ↑0 ↓0/);
     setMockGitOutput("# branch.head main\0# branch.ab +1 -2\0" +
@@ -83,7 +99,7 @@ await test("footer dynamically renders branch, available tools and status; toggl
     await flush();
     assert.match(footer.render(120)[0], /main ●3 \(1 staged, 1 nieuw\) ↑1 ↓2/);
     for (const width of [0, 1, 10, 40, 120]) {
-      assert.equal(footer.render(width).length, 1);
+      assert.equal(footer.render(width).length, 2);
       assert.ok(footer.render(width).every(line => visibleWidth(line) <= width));
     }
     assert.equal(colors.get("π OomAgent"), "success");
@@ -121,7 +137,7 @@ await test("footer dynamically renders branch, available tools and status; toggl
     tools = [];
     assert.match(footer.render(80)[0], /0 eigen.*0 totaal/);
     ctx.ui.theme = { fg: (_color, text) => `\x1b[32m${text}\x1b[0m`, bg: (_color, text) => text };
-    for (const width of [0, 1, 10, 40, 80]) assert.ok(visibleWidth(footer.render(width)[0]) <= width);
+    for (const width of [0, 1, 10, 40, 80]) assert.ok(footer.render(width).every(line => visibleWidth(line) <= width));
   } finally {
     footer.dispose();
     footer.dispose();
@@ -194,6 +210,66 @@ await test("Git stats read local changes and upstream counts without fetching", 
     assert.equal(detached.ahead, null);
   } finally { await rm(root, { recursive: true, force: true }); }
   await assert.rejects(readFooterGitStatus(root));
+});
+
+await test("compact header and message dividers fit narrow terminals and follow theme changes", () => {
+  const handlers = new Map();
+  const commands = new Map();
+  let headerFactory;
+  let transform;
+  let selectedTheme;
+  const ctx = {
+    mode: "tui", hasUI: true,
+    ui: {
+      theme: { fg: (_color, text) => text, bg: (_color, text) => text, bold: text => text },
+      setFooter() {}, setTitle() {}, setEditorComponent() {},
+      setHeader: factory => { headerFactory = factory; },
+      setWidget: (_key, widget) => assert.equal(widget, undefined),
+      setTheme: name => { selectedTheme = name; return { success: true }; },
+    },
+  };
+  register({
+    on: (name, handler) => handlers.set(name, handler),
+    registerCommand: (name, command) => commands.set(name, command),
+    registerMarkdownTransformer: fn => { transform = fn; },
+  });
+  handlers.get("session_start")({}, ctx);
+  const header = headerFactory({ requestRender() {} });
+  try {
+    assert.equal(selectedTheme, "oomagent-swiss");
+    assert.equal(header.render(100).length, 2, "large scene is off by default");
+    assert.match(header.render(100)[0], /OomAgent/);
+    ctx.ui.theme = {
+      fg: (_color, text) => `\x1b[36m${text}\x1b[0m`,
+      bg: (_color, text) => text, bold: text => text,
+    };
+    for (const width of [0, 1, 10, 40, 80, 120]) {
+      assert.ok(header.render(width).every(line => visibleWidth(line) <= width));
+    }
+    const markdown = "**Hello**\n\n```python\nprint('hello')\n```";
+    const output = transform(markdown, { messageType: "user", availableWidth: 80, isStreaming: false });
+    assert.match(output, /Mouad/);
+    assert.ok(output.includes(markdown), "Markdown content stays intact");
+    const streaming = transform(markdown, { messageType: "assistant", availableWidth: 80, isStreaming: true });
+    assert.match(streaming, /pi-Oomagent/);
+    assert.ok(!streaming.includes("╰"), "no closing divider while streaming");
+    commands.get("oom-screen").handler("", ctx);
+    assert.ok(header.render(100).length > 2, "legacy scene remains available");
+    handlers.get("before_agent_start")();
+    assert.equal(header.render(100).length, 2);
+  } finally {
+    header.dispose();
+    handlers.get("session_shutdown")();
+  }
+});
+
+await test("theme validates with Pi's loader", async () => {
+  const hostRoot = dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent")));
+  const { loadThemeFromPath } = await import(pathToFileURL(join(hostRoot, "modes/interactive/theme/theme.js")).href);
+  const theme = loadThemeFromPath(fileURLToPath(new URL("../.pi/themes/oomagent-swiss.json", import.meta.url)));
+  assert.equal(theme.name, "oomagent-swiss");
+  assert.equal(theme.appearance, "dark");
+  assert.ok(theme.fg("accent", "OomAgent").includes("OomAgent"));
 });
 
 await test("non-terminal sessions do not install a footer", () => {
