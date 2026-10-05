@@ -6,7 +6,7 @@
   "type": "module",
   "keywords": ["pi-package"],
   "pi": {
-    "extensions": ["./.pi/extensions/oomagent-tools.ts", "./.pi/extensions/oomagent-ui.ts"],
+    "extensions": ["./.pi/extensions/oomagent-tools.ts", "./.pi/extensions/oomagent-ui.ts", "./.pi/extensions/oomagent-context.ts"],
     "themes": ["./.pi/themes/oomagent-swiss.json"],
     "skills": ["./.pi/skills"],
     "prompts": ["./.pi/prompts"]

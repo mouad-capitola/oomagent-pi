@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { readFile, mkdtemp, writeFile, rm } from "node:fs/promises";
+import { readFile, mkdtemp, writeFile, rm, mkdir, symlink } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { tmpdir } from "node:os";
 import { createRequire, stripTypeScriptTypes } from "node:module";
 import { pathToFileURL, fileURLToPath } from "node:url";
-import { basename, dirname, join } from "node:path";
+import { dirname, join } from "node:path";
 
 // Resolve the host-supplied peer from Pi's dependency tree.
 const require = createRequire(import.meta.resolve("@earendil-works/pi-coding-agent"));
@@ -18,14 +18,10 @@ const source = (await readFile(new URL("../.pi/extensions/oomagent-ui.ts", impor
   .replace('"@earendil-works/pi-tui"', JSON.stringify(tuiUrl))
   .replaceAll("import.meta.url", JSON.stringify(new URL("../.pi/extensions/oomagent-ui.ts", import.meta.url).href));
 const load = text => import(`data:text/javascript;base64,${Buffer.from(stripTypeScriptTypes(text)).toString("base64")}`);
-const { parseFooterGitStatus, readFooterGitStatus } = await load(source);
-const { default: register, setMockGitOutput } = await load(source.replace(
-  "const execFileAsync = promisify(execFile);",
-  'let mockGitOutput = "# branch.head main\\0# branch.ab +0 -0\\0"; export function setMockGitOutput(output) { mockGitOutput = output; } const execFileAsync = async () => { if (mockGitOutput === null) throw new Error("Git unavailable"); return { stdout: mockGitOutput }; };'
-));
-const flush = () => new Promise(resolve => setImmediate(resolve));
+const { parseFooterGitStatus, readFooterGitStatus, latestMessageInputTokens, messageBorder, sceneLines, readProjectTree, renderProjectPanel, renderFooterTicker } = await load(source);
+const { default: register } = await load(source);
 
-await test("footer dynamically renders branch, available tools and status; toggles and disposes", async () => {
+await test("footer shows only tokens and available tools; toggles and disposes", async () => {
   const handlers = new Map();
   const commands = new Map();
   const ownDir = fileURLToPath(new URL("../.pi/extensions/", import.meta.url));
@@ -46,20 +42,16 @@ await test("footer dynamically renders branch, available tools and status; toggl
     getActiveTools: () => activeTools,
   });
   let factory;
-  let idle = true;
-  let usage = { percent: 42, tokens: 42000, contextWindow: 100000 };
-  let branch = "main";
-  const colors = new Map();
+  let entries = [];
   const backgrounds = [];
   const ctx = {
     mode: "tui", hasUI: true,
     cwd: dirname(dirname(ownDir.replace(/\/$/, ""))),
-    isIdle: () => idle,
-    model: { id: "test-model" },
-    getContextUsage: () => usage,
+    sessionManager: { getBranch: () => entries },
     ui: {
       theme: {
-        fg: (color, text) => { colors.set(text, color); return text; },
+        fg: (_color, text) => text,
+        style: text => text,
         bg: (color, text) => { backgrounds.push(color); return text; },
       },
       setFooter: value => { factory = value; }, setTheme: () => ({ success: true }),
@@ -67,92 +59,133 @@ await test("footer dynamically renders branch, available tools and status; toggl
     },
   };
   handlers.get("session_start")({}, ctx);
-  let disposed = 0;
   let redraws = 0;
-  let branchChanged;
   const makeFooter = () => factory({ requestRender: () => redraws++ }, ctx.ui.theme, {
-    getGitBranch: () => branch,
-    getExtensionStatuses: () => new Map([["test", "extension-status"]]),
-    onBranchChange: fn => { branchChanged = fn; return () => disposed++; },
+    getGitBranch() { assert.fail("footer must not read Git"); },
+    getExtensionStatuses() { assert.fail("footer must not read unrelated statuses"); },
+    onBranchChange() { assert.fail("footer must not subscribe to Git"); },
   });
   const footer = makeFooter();
   try {
-    assert.equal(footer.render(80)[0].trimEnd(), "π OomAgent | main … | 2 eigen | 7 totaal | Ready ✓");
-    assert.equal(footer.render(120)[1].trimEnd(), `Context 42% | ${basename(ctx.cwd)} | test-model | extension-status`);
-    usage = undefined;
-    assert.match(footer.render(120)[1], /Context —/);
-    usage = { percent: null, tokens: null, contextWindow: 100000 };
-    assert.match(footer.render(120)[1], /Context —/);
-    usage.percent = 80;
-    footer.render(120);
-    assert.equal(colors.get("Context 80%"), "warning");
-    usage.percent = 95;
-    footer.render(120);
-    assert.equal(colors.get("Context 95%"), "error");
-    usage.percent = 42;
-    await flush();
-    assert.match(footer.render(120)[0], /main ✓ ↑0 ↓0/);
-    setMockGitOutput("# branch.head main\0# branch.ab +1 -2\0" +
-      "1 M. N... 100644 100644 100644 abc abc staged.txt\0" +
-      "1 .M N... 100644 100644 100644 abc abc unstaged.txt\0? new.txt\0");
-    branchChanged();
-    await flush();
-    assert.match(footer.render(120)[0], /main ●3 \(1 staged, 1 nieuw\) ↑1 ↓2/);
-    for (const width of [0, 1, 10, 40, 120]) {
-      assert.equal(footer.render(width).length, 2);
-      assert.ok(footer.render(width).every(line => visibleWidth(line) <= width));
-    }
-    assert.equal(colors.get("π OomAgent"), "success");
-    assert.equal(colors.get("2 eigen"), "accent");
-    assert.equal(colors.get("7 totaal"), "accent");
-    assert.equal(colors.get("Ready ✓"), "success");
-    assert.ok(backgrounds.every(color => color === "userMessageBg"));
-
-    branch = "feature/日本語";
-    setMockGitOutput("# branch.head feature/日本語\0");
-    branchChanged();
-    await flush();
-    assert.ok(redraws > 0);
-    assert.match(footer.render(120)[0], /✓ · geen upstream/);
-    assert.match(footer.render(80)[0], /feature\/日本語/);
+    assert.equal(footer.render(80)[0].split("   ")[0], "Tokens: 0  |  Tools: 7  |  Eigen tools: 2");
+    assert.match(footer.render(80)[0], /Oomagent-Mouad/);
+    entries = [
+      { type: "message", message: { role: "user" } },
+      { type: "message", message: { role: "assistant", usage: { input: 1000, cacheRead: 200, cacheWrite: 34 } } },
+    ];
+    assert.equal(footer.render(80)[0].split("   ")[0], "Tokens: 1.234  |  Tools: 7  |  Eigen tools: 2");
+    entries.push({ type: "message", message: { role: "user" } });
+    assert.match(footer.render(80)[0], /Tokens: —/);
     tools = [...tools, { name: "new-tool", exposure: "deferred", sourceInfo: ownSource }];
-    assert.match(footer.render(80)[0], /3 eigen.*8 totaal/);
+    assert.match(footer.render(80)[0], /Tools: 8.*Eigen tools: 3/);
     tools = [...tools, { name: "external-tool", exposure: "deferred", sourceInfo: { path: join(ownDir.replace(/\/$/, "") + "-other", "external.ts") } }];
-    assert.match(footer.render(80)[0], /3 eigen.*9 totaal/);
+    assert.match(footer.render(80)[0], /Tools: 9.*Eigen tools: 3/);
     activeTools = activeTools.filter(name => name !== "bash");
-    assert.match(footer.render(80)[0], /3 eigen.*8 totaal/);
-    idle = false;
-    assert.match(footer.render(80)[0], /Working…/);
-    idle = true;
-    branch = undefined;
-    setMockGitOutput(null);
-    branchChanged();
-    await flush();
-    assert.match(footer.render(120)[0], /geen branch Git \?.*Ready ✓/);
-    // No branch-change event or header animation: periodic polling still recovers.
-    setMockGitOutput("# branch.head main\0# branch.ab +2 -0\0");
+    assert.match(footer.render(80)[0], /Tools: 8.*Eigen tools: 3/);
     await new Promise(resolve => setTimeout(resolve, 1100));
-    await flush();
-    assert.match(footer.render(120)[0], /main ✓ ↑2 ↓0/);
+    assert.ok(redraws > 0, "periodic refresh works without header animation");
     tools = [];
-    assert.match(footer.render(80)[0], /0 eigen.*0 totaal/);
-    ctx.ui.theme = { fg: (_color, text) => `\x1b[32m${text}\x1b[0m`, bg: (_color, text) => text };
-    for (const width of [0, 1, 10, 40, 80]) assert.ok(footer.render(width).every(line => visibleWidth(line) <= width));
+    assert.match(footer.render(80)[0], /Tools: 0.*Eigen tools: 0/);
+    ctx.ui.theme = { fg: (_color, text) => `\x1b[32m${text}\x1b[0m`, style: text => `\x1b[36m${text}\x1b[0m`, bg: (_color, text) => text };
+    for (const width of [0, 1, 10, 40, 80, 120]) {
+      const lines = footer.render(width);
+      assert.equal(lines.length, 1);
+      assert.equal(visibleWidth(lines[0]), width);
+    }
+    assert.ok(backgrounds.every(color => color === "userMessageBg"));
   } finally {
     footer.dispose();
     footer.dispose();
   }
-  assert.equal(disposed, 1);
+  const beforeDispose = redraws;
+  await new Promise(resolve => setTimeout(resolve, 1100));
+  assert.equal(redraws, beforeDispose, "disposed footer stops refreshing");
   await commands.get("oom-footer").handler("", ctx);
   assert.equal(factory, undefined);
   await commands.get("oom-footer").handler("", ctx);
   assert.equal(typeof factory, "function");
-  const reopened = makeFooter();
-  const beforeDispose = redraws;
-  reopened.dispose();
-  await flush();
-  assert.equal(redraws, beforeDispose, "disposed async refresh must not request a render");
+  makeFooter().dispose();
   handlers.get("session_shutdown")();
+});
+
+await test("neon footer text bounces continuously and fits narrow widths", () => {
+  const colors = [];
+  const theme = { style: (text, options) => { colors.push(options.fg); return text; } };
+  const banner = "Oomagent-Mouad";
+  assert.equal(renderFooterTicker(28, 0, theme).indexOf(banner), 0);
+  assert.equal(renderFooterTicker(28, 1, theme).indexOf(banner), 1);
+  const lastPosition = 28 - banner.length;
+  assert.equal(renderFooterTicker(28, lastPosition, theme).indexOf(banner), lastPosition);
+  assert.equal(renderFooterTicker(28, lastPosition + 1, theme).indexOf(banner), lastPosition - 1);
+  assert.equal(renderFooterTicker(28, 2 * lastPosition, theme).indexOf(banner), 0);
+  assert.equal(renderFooterTicker(28, 2 * lastPosition + 1, theme).indexOf(banner), 1);
+  for (const width of [banner.length, banner.length + 1, 28, 80]) {
+    const distance = width - banner.length;
+    for (let frame = 0; frame <= 4 * distance + 2; frame++) {
+      const phase = distance ? frame % (2 * distance) : 0;
+      const expected = phase <= distance ? phase : 2 * distance - phase;
+      assert.equal(renderFooterTicker(width, frame, theme).indexOf(banner), expected);
+    }
+  }
+  assert.equal(new Set(colors.map(color => JSON.stringify(color))).size, 4);
+  for (const width of [0, 1, 10, 13, 14, 28, 80]) {
+    for (const frame of [0, 1, 15, 100]) assert.equal(visibleWidth(renderFooterTicker(width, frame, theme)), width);
+  }
+});
+
+await test("reload zeroes only the footer display, then shows new input including caches", () => {
+  const handlers = new Map();
+  let factory;
+  let entries = [
+    { type: "message", message: { role: "user" } },
+    { type: "message", message: { role: "assistant", usage: { input: 900, cacheRead: 100, cacheWrite: 0 } } },
+  ];
+  const ctx = {
+    mode: "tui", hasUI: true, cwd: "/project",
+    sessionManager: { getBranch: () => entries },
+    ui: {
+      theme: { fg: (_color, text) => text, style: text => text, bg: (_color, text) => text },
+      setFooter: value => { factory = value; }, setTheme: () => ({ success: true }),
+      setTitle() {}, setEditorComponent() {}, setHeader() {}, setWidget() {},
+    },
+  };
+  register({
+    on: (name, fn) => handlers.set(name, fn), registerCommand() {}, registerMarkdownTransformer() {},
+    getActiveTools: () => [], getAllTools: () => [],
+  });
+  let footer;
+  try {
+    handlers.get("session_start")({}, ctx);
+    footer = factory({ requestRender() {} });
+    assert.match(footer.render(80)[0], /Tokens: 0/);
+    assert.equal(entries.length, 2, "reload must not erase conversation history");
+    entries.push({ type: "message", message: { role: "user" } });
+    assert.match(footer.render(80)[0], /Tokens: —/);
+    entries.push({ type: "message", message: { role: "assistant", usage: { input: 30, cacheRead: 40, cacheWrite: 50 } } });
+    assert.match(footer.render(80)[0], /Tokens: 120/);
+    handlers.get("session_start")({}, ctx);
+    footer = factory({ requestRender() {} });
+    assert.match(footer.render(80)[0], /Tokens: 0/);
+    assert.equal(entries.length, 4);
+  } finally {
+    footer?.dispose();
+    handlers.get("session_shutdown")();
+  }
+});
+
+await test("input per user message includes cache and excludes tool follow-up requests", () => {
+  const user = { type: "message", message: { role: "user" } };
+  const assistant = (input, cacheRead = 0, cacheWrite = 0) => ({
+    type: "message", message: { role: "assistant", usage: { input, cacheRead, cacheWrite } },
+  });
+  assert.equal(latestMessageInputTokens([]), undefined);
+  assert.equal(latestMessageInputTokens([assistant(100)]), undefined);
+  assert.equal(latestMessageInputTokens([user]), undefined);
+  assert.equal(latestMessageInputTokens([user, assistant(100, 200, 300), assistant(900)]), 600);
+  assert.equal(latestMessageInputTokens([user, assistant(100), user]), undefined);
+  assert.equal(latestMessageInputTokens([user, assistant(100), user, assistant(20, 30)]), 50);
+  assert.equal(latestMessageInputTokens([user, assistant(0), { type: "custom" }, assistant(40)]), 40);
+  assert.equal(latestMessageInputTokens([user, assistant(NaN), assistant(40)]), 40);
 });
 
 await test("Git parser counts files once, handles renames/newlines and conflicts", () => {
@@ -212,7 +245,7 @@ await test("Git stats read local changes and upstream counts without fetching", 
   await assert.rejects(readFooterGitStatus(root));
 });
 
-await test("compact header and message dividers fit narrow terminals and follow theme changes", () => {
+await test("orbital header and message dividers fit narrow terminals and follow theme changes", () => {
   const handlers = new Map();
   const commands = new Map();
   let headerFactory;
@@ -237,14 +270,21 @@ await test("compact header and message dividers fit narrow terminals and follow 
   const header = headerFactory({ requestRender() {} });
   try {
     assert.equal(selectedTheme, "oomagent-swiss");
-    assert.equal(header.render(100).length, 2, "large scene is off by default");
-    assert.match(header.render(100)[0], /OomAgent/);
+    assert.equal(header.render(100).length, 4, "compact orbital panel is shown by default");
+    assert.match(header.render(100)[0], /OomAgent.*ENGINEERING WORKSPACE/);
+    assert.match(header.render(100)[1], /Inspecteren.*Bouwen.*Verifiëren/);
+    assert.match(header.render(100)[2], /\/help.*\/model.*\/settings.*\/oom-tree/);
+    assert.match(header.render(40)[0], /OomAgent/);
+    assert.equal(header.render(40).length, 2);
     ctx.ui.theme = {
       fg: (_color, text) => `\x1b[36m${text}\x1b[0m`,
       bg: (_color, text) => text, bold: text => text,
     };
-    for (const width of [0, 1, 10, 40, 80, 120]) {
-      assert.ok(header.render(width).every(line => visibleWidth(line) <= width));
+    for (const width of [0, 1, 10, 40, 47, 48, 80, 120]) {
+      const lines = header.render(width);
+      assert.equal(lines.length, width < 48 ? 2 : 4);
+      assert.ok(lines.every(line => visibleWidth(line) === width));
+      if (width > 0) assert.ok(lines.every(line => line.includes("\x1b[36m")), "uses the current theme");
     }
     const markdown = "**Hello**\n\n```python\nprint('hello')\n```";
     const output = transform(markdown, { messageType: "user", availableWidth: 80, isStreaming: false });
@@ -254,12 +294,140 @@ await test("compact header and message dividers fit narrow terminals and follow 
     assert.match(streaming, /pi-Oomagent/);
     assert.ok(!streaming.includes("╰"), "no closing divider while streaming");
     commands.get("oom-screen").handler("", ctx);
-    assert.ok(header.render(100).length > 2, "legacy scene remains available");
+    assert.match(header.render(100)[0], /ORBITAL NETWORK/);
+    for (const width of [48, 64, 80, 120]) {
+      assert.ok(header.render(width).every(line => visibleWidth(line) <= width));
+    }
     handlers.get("before_agent_start")();
-    assert.equal(header.render(100).length, 2);
+    assert.equal(header.render(100).length, 4);
   } finally {
     header.dispose();
     handlers.get("session_shutdown")();
+  }
+});
+
+await test("orbital node scene and dotted dividers stay within terminal columns", () => {
+  for (const frame of [0, 1, 20]) {
+    const scene = sceneLines(frame);
+    assert.equal(scene.length, 11);
+    assert.ok(scene.every(line => visibleWidth(line.map(cell => cell.text).join("")) === 64));
+    assert.ok(scene.flat().some(cell => cell.text === "◎"));
+  }
+  for (const width of [0, 1, 3, 4, 10, 40, 80]) {
+    for (const bottom of [false, true]) {
+      const border = messageBorder("日本語 OomAgent", width, bottom);
+      assert.ok(visibleWidth(border) <= width);
+      if (width >= 4) {
+        assert.equal(visibleWidth(border), width);
+        assert.ok(border.includes("◎"));
+      }
+    }
+  }
+});
+
+await test("project tree reads names only, bounds depth and hides sensitive/noisy entries", async () => {
+  const root = await mkdtemp(join(tmpdir(), "oomagent-tree-"));
+  try {
+    await mkdir(join(root, "src", "deep"), { recursive: true });
+    await writeFile(join(root, "src", "deep", "never-shown.txt"), "");
+    await writeFile(join(root, "src", "app.ts"), "");
+    await writeFile(join(root, "src", "extra.ts"), "");
+    await writeFile(join(root, "README.md"), "not read by the tree");
+    for (const name of [".git", ".serena", "node_modules"]) {
+      await mkdir(join(root, name));
+      await writeFile(join(root, name, "hidden.txt"), "");
+    }
+    for (const name of [".env", ".env.local", "bad\x1b[31m.txt", "日本語.txt"]) {
+      await writeFile(join(root, name), "");
+    }
+    await symlink(join(root, "src"), join(root, "linked"), "dir");
+    await symlink(join(root, "README.md"), join(root, "linked-file"));
+    const entries = await readProjectTree(root);
+    const text = entries.map(entry => entry.text).join("\n");
+    assert.match(text, /📁 src/);
+    assert.match(text, /📄 README.md/);
+    assert.match(text, /日本語/);
+    assert.match(text, /bad\?\[31m/);
+    assert.match(text, /1 meer/);
+    assert.doesNotMatch(text, /hidden|never-shown|\.env|node_modules|\.git|\.serena|linked|\x1b/);
+    assert.equal(entries[0].directory, true, "directories appear first");
+    for (let i = 0; i < 30; i++) await writeFile(join(root, `file-${i}.txt`), "");
+    assert.ok((await readProjectTree(root)).length <= 65);
+    await assert.rejects(readProjectTree(join(root, "missing")));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+await test("project panel fits emoji, ANSI, resize, empty, loading and error states", () => {
+  const theme = {
+    fg: (_color, text) => `\x1b[36m${text}\x1b[0m`,
+    bg: (_color, text) => text,
+  };
+  const entries = Array.from({ length: 20 }, (_, i) => ({
+    text: `├─ 📁 日本語-${i}`, directory: true,
+  }));
+  for (const width of [0, 1, 10, 40, 80, 109, 110, 120, 200]) {
+    for (const items of [undefined, [], entries]) {
+      const lines = renderProjectPanel(["OomAgent"], items, "/project/日本語", width, theme);
+      assert.ok(lines.every(line => visibleWidth(line) === width));
+      assert.ok(lines.length <= 12);
+      if (width >= 110) assert.match(lines[0], /OomAgent.*│.*📁/);
+    }
+  }
+  assert.match(renderProjectPanel([], undefined, "/project", 80, theme).join("\n"), /laden/);
+  assert.match(renderProjectPanel([], undefined, "/project", 80, theme, true).join("\n"), /Niet leesbaar/);
+  assert.match(renderProjectPanel([], [], "/project", 80, theme).join("\n"), /Lege map/);
+});
+
+await test("header loads a real project panel and toggles it without changing the footer", async () => {
+  const root = await mkdtemp(join(tmpdir(), "oomagent-panel-"));
+  const handlers = new Map();
+  const commands = new Map();
+  let factory;
+  let footer;
+  let redraws = 0;
+  register({
+    on: (name, fn) => handlers.set(name, fn),
+    registerCommand: (name, command) => commands.set(name, command),
+    registerMarkdownTransformer() {},
+  });
+  const ctx = {
+    mode: "tui", hasUI: true, cwd: root,
+    ui: {
+      theme: { fg: (_color, text) => text, bg: (_color, text) => text, bold: text => text },
+      setFooter: value => { footer = value; }, setTitle() {}, setEditorComponent() {},
+      setHeader: value => { factory = value; }, setWidget() {},
+      setTheme: () => ({ success: true }),
+    },
+  };
+  let header;
+  try {
+    await writeFile(join(root, "README.md"), "");
+    handlers.get("session_start")({}, ctx);
+    const initialFooter = footer;
+    header = factory({ requestRender: () => redraws++ });
+    assert.match(header.render(120).join("\n"), /Structuur laden/);
+    for (let i = 0; i < 50 && !header.render(120).join("\n").includes("README.md"); i++) {
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    assert.match(header.render(120).join("\n"), /📄 README.md/);
+    await commands.get("oom-tree").handler("", ctx);
+    assert.equal(header.render(120).length, 4);
+    assert.doesNotMatch(header.render(120).join("\n"), /README.md/);
+    await commands.get("oom-tree").handler("", ctx);
+    assert.match(header.render(120).join("\n"), /README.md/);
+    assert.equal(footer, initialFooter);
+    assert.ok(redraws > 0);
+    header.dispose();
+    header.dispose();
+    const stopped = redraws;
+    await new Promise(resolve => setTimeout(resolve, 220));
+    assert.equal(redraws, stopped);
+  } finally {
+    header?.dispose();
+    handlers.get("session_shutdown")();
+    await rm(root, { recursive: true, force: true });
   }
 });
 
@@ -270,6 +438,9 @@ await test("theme validates with Pi's loader", async () => {
   assert.equal(theme.name, "oomagent-swiss");
   assert.equal(theme.appearance, "dark");
   assert.ok(theme.fg("accent", "OomAgent").includes("OomAgent"));
+  const ticker = renderFooterTicker(28, 1, theme);
+  assert.equal(visibleWidth(ticker), 28);
+  assert.ok(ticker.includes("\x1b["), "neon rendering uses terminal color/style escapes");
 });
 
 await test("non-terminal sessions do not install a footer", () => {

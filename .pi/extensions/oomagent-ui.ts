@@ -1,17 +1,58 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { basename, dirname, resolve } from "node:path";
+import { readdir, realpath } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { CustomEditor, type ExtensionAPI, type ExtensionContext, type Theme } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { rgbColor, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
 const execFileAsync = promisify(execFile);
 const OWN_EXTENSION_DIR = dirname(fileURLToPath(import.meta.url));
 const BRAND = "OomAgent";
+const FOOTER_BANNER = "Oomagent-Mouad";
+const NEON_COLORS = [
+  rgbColor(0, 255, 240), rgbColor(255, 60, 225),
+  rgbColor(175, 95, 255), rgbColor(90, 255, 120),
+];
+
+export function renderFooterTicker(width: number, frame: number, theme: Theme): string {
+  const columns = Math.max(0, width);
+  const distance = Math.max(0, columns - FOOTER_BANNER.length);
+  const phase = distance > 0 ? frame % (2 * distance) : 0;
+  const position = phase <= distance ? phase : 2 * distance - phase;
+  const neon = [...FOOTER_BANNER].map((char, i) =>
+    theme.style(char, { fg: NEON_COLORS[(i + frame) % NEON_COLORS.length], bold: true })
+  ).join("");
+  const clipped = truncateToWidth(" ".repeat(position) + neon, columns, "");
+  return clipped + " ".repeat(Math.max(0, columns - visibleWidth(clipped)));
+}
 type Ink = "text" | "muted" | "accent" | "success" | "error";
 
 function fit(text: string, width: number): string {
   return truncateToWidth(text, Math.max(0, width), "");
+}
+
+// Provider input includes uncached input plus cache reads/writes, not output.
+export function latestMessageInputTokens(entries: readonly {
+  type: string;
+  message?: { role: string; usage?: { input: number; cacheRead: number; cacheWrite: number } };
+}[]): number | undefined {
+  let hasUser = false;
+  let tokens: number | undefined;
+  for (const entry of entries) {
+    if (entry.type !== "message") continue;
+    if (entry.message?.role === "user") {
+      hasUser = true;
+      tokens = undefined;
+    } else if (hasUser && tokens === undefined && entry.message?.role === "assistant") {
+      const usage = entry.message.usage;
+      if (usage) {
+        const total = usage.input + usage.cacheRead + usage.cacheWrite;
+        if (Number.isFinite(total) && total > 0) tokens = total;
+      }
+    }
+  }
+  return tokens;
 }
 
 type FooterGitStatus = {
@@ -63,53 +104,95 @@ export async function readFooterGitStatus(cwd: string, signal?: AbortSignal): Pr
   return parseFooterGitStatus(stdout);
 }
 
+type ProjectTreeEntry = { text: string; directory: boolean };
+
+// Names only: no file contents, no symlink traversal, bounded two-level preview.
+export async function readProjectTree(cwd: string): Promise<ProjectTreeEntry[]> {
+  const root = await realpath(cwd);
+  const ignored = new Set([".git", ".serena", "node_modules", ".DS_Store"]);
+  const visible = (name: string) => !ignored.has(name) && !/^\.env(?:$|\.)/.test(name);
+  const safe = (name: string) => name.replace(/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g, "?");
+  const list = async (path: string) => (await readdir(path, { withFileTypes: true }))
+    .filter(entry => visible(entry.name) && !entry.isSymbolicLink())
+    .sort((a, b) => Number(b.isDirectory()) - Number(a.isDirectory()) || a.name.localeCompare(b.name));
+  const children = await list(root);
+  const result: ProjectTreeEntry[] = [];
+  for (const [index, child] of children.slice(0, 16).entries()) {
+    const last = index === children.length - 1;
+    result.push({ text: `${last ? "└" : "├"}─ ${child.isDirectory() ? "📁" : "📄"} ${safe(child.name)}`, directory: child.isDirectory() });
+    if (!child.isDirectory()) continue;
+    try {
+      const path = resolve(root, child.name);
+      // Recheck after discovery so a replaced/symlinked directory is not traversed.
+      if (await realpath(path) !== path) continue;
+      const nested = await list(path);
+      for (const [i, entry] of nested.slice(0, 2).entries()) {
+        result.push({
+          text: `${last ? " " : "│"}  ${i === nested.length - 1 ? "└" : "├"}─ ${entry.isDirectory() ? "📁" : "📄"} ${safe(entry.name)}`,
+          directory: entry.isDirectory(),
+        });
+      }
+      if (nested.length > 2) result.push({ text: `${last ? " " : "│"}  └─ … ${nested.length - 2} meer`, directory: false });
+    } catch {
+      result.push({ text: `${last ? " " : "│"}  └─ niet leesbaar`, directory: false });
+    }
+  }
+  if (children.length > 16) result.push({ text: `└─ … ${children.length - 16} meer`, directory: false });
+  return result;
+}
+
+export function renderProjectPanel(
+  brand: string[], entries: readonly ProjectTreeEntry[] | undefined, cwd: string,
+  width: number, theme: Theme, error = false,
+): string[] {
+  const cleanName = basename(cwd).replace(/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g, "?");
+  const wide = width >= 110;
+  const limit = wide ? 10 : 3;
+  const tree = [
+    theme.fg("accent", `📁 ${cleanName || "Project"}`),
+    ...(entries === undefined
+      ? [theme.fg("muted", error ? "Niet leesbaar" : "Structuur laden…")]
+      : entries.length === 0
+        ? [theme.fg("muted", "Lege map")]
+        : entries.slice(0, limit).map(entry => theme.fg(entry.directory ? "warning" : "muted", entry.text))),
+  ];
+  if (entries && entries.length > limit) tree.push(theme.fg("dim", `… ${entries.length - limit} regels meer`));
+  const pad = (line: string, columns: number) => {
+    const clipped = fit(line, columns);
+    return clipped + " ".repeat(Math.max(0, columns - visibleWidth(clipped)));
+  };
+  if (!wide) return [...brand, ...tree].map(line => theme.bg("userMessageBg", pad(line, width)));
+  const rightWidth = 36;
+  const leftWidth = width - rightWidth - 3;
+  return Array.from({ length: Math.max(brand.length, tree.length) }, (_, i) =>
+    theme.bg("userMessageBg", pad(brand[i] ?? "", leftWidth) +
+      theme.fg("border", " │ ") + pad(tree[i] ?? "", rightWidth))
+  );
+}
+
 export function sceneLines(frame: number): { text: string; ink: Ink }[][] {
-  const width = 64;
-  const height = 17;
-  const cells = Array.from({ length: height }, () => Array.from({ length: width }, () => ({ text: " ", ink: "muted" as Ink })));
-  function draw(x: number, y: number, text: string, ink: Ink) {
-    if (y < 0 || y >= height) return;
-    [...text].forEach((char, index) => {
-      if (x + index >= 0 && x + index < width) cells[y][x + index] = { text: char, ink };
-    });
-  }
-  const logo = [
-    "  ___   ___  __  __ ",
-    " / _ \\ / _ \\|  \\/  |",
-    "| (_) | (_) | |\\/| |",
-    " \\___/ \\___/|_|  |_|",
+  const link = frame % 2 ? "┆" : "│";
+  const layout: { text: string; ink: Ink }[] = [
+    { text: "           ◎ INPUT           ◎ CONTEXT", ink: "success" },
+    { text: `           ${link}                 ${link}`, ink: "accent" },
+    { text: "           ◎ PLAN            ◎ TOOLS", ink: "success" },
+    { text: `           ${link}                 ${link}`, ink: "accent" },
+    { text: "           ╰ · · · ◎ · · · · ╯", ink: "accent" },
+    { text: "                 OomAgent", ink: "text" },
+    { text: `                    ${link}`, ink: "accent" },
+    { text: "           ╭ · · · ·┴· · · · ╮", ink: "accent" },
+    { text: "           ◎ CODE            ◎ REVIEW", ink: "success" },
+    { text: `           ${link}                 ${link}`, ink: "accent" },
+    { text: "           ◎ TEST            ◎ OUTPUT", ink: "accent" },
   ];
-  logo.forEach((line, y) => draw(3, y + 1, line, "text"));
-  draw(5, 6, BRAND, "success");
-  for (let point = 0; point < 64; point++) {
-    const angle = (point / 64) * Math.PI * 2;
-    const x = Math.round(44 + Math.cos(angle) * 11);
-    const y = Math.round(4 + Math.sin(angle) * 3);
-    const bright = (point + frame * 3) % 16 < 4;
-    draw(x, y, bright ? "*" : ".", bright ? "success" : "accent");
-  }
-  const orbit = frame * 0.18;
-  draw(Math.round(44 + Math.cos(orbit) * 7), Math.round(4 + Math.sin(orbit) * 2), "o", "error");
-  const mountains = [
-    "                /\\                       /\\",
-    "       /\\      /  \\       /\\            /  \\",
-    "      /  \\    /^^^^\\     /  \\    /\\   /^^^^\\",
-    "  /\\ /^^^^\\  /      \\   /^^^^\\  /  \\ /      \\",
-    " /  /      \\/        \\/      \\/^^^^\\        \\",
-    "/^^/        \\         \\       /      \\        \\",
-    "__/__________\\_________\\_____/________\\________\\__",
-  ];
-  mountains.forEach((line, index) => draw(2, index + 9, line, "text"));
-  for (let y = 11; y <= 15; y++) draw(29, y, (y + frame) % 3 === 0 ? ":|:" : "|:|", "accent");
-  draw(20, 16, frame % 2 ? "~~~~~ ~~~ ~~~~~ ~~~ ~~~~~" : "~~~ ~~~~~ ~~~ ~~~~~ ~~~~~", "accent");
-  return cells;
+  return layout.map(({ text, ink }) => [...text.padEnd(64)].map(text => ({ text, ink })));
 }
 
 export function messageBorder(label: string, width: number, bottom = false): string {
   if (width < 4) return "";
-  if (bottom) return `╰${"─".repeat(width - 2)}╯`;
+  if (bottom) return `╰${"┄".repeat(width - 2)}◎`;
   const title = fit(` ${label} `, width - 2);
-  return `╭${title}${"─".repeat(Math.max(0, width - visibleWidth(title) - 2))}╮`;
+  return `◎${title}${"┄".repeat(Math.max(0, width - visibleWidth(title) - 2))}╮`;
 }
 
 class BrandEditor extends CustomEditor {
@@ -122,45 +205,27 @@ class BrandEditor extends CustomEditor {
 
 export default function (pi: ExtensionAPI) {
   let footerEnabled = true;
+  let footerMotion = true;
+  let tokenBaseline = 0;
   let disposeFooter: (() => void) | undefined;
   const installFooter = (ctx: ExtensionContext) => {
     disposeFooter?.();
-    ctx.ui.setFooter(footerEnabled ? (tui, _theme, data) => {
+    ctx.ui.setFooter(footerEnabled ? (tui) => {
       let disposed = false;
-      let pending = false;
-      let gitStatus: FooterGitStatus | null | undefined;
-      const controller = new AbortController();
-      const refreshGit = async () => {
-        if (disposed || pending) return;
-        pending = true;
-        try {
-          const status = await readFooterGitStatus(ctx.cwd, controller.signal);
-          if (!disposed) gitStatus = status;
-        } catch {
-          if (!disposed) gitStatus = null;
-        } finally {
-          pending = false;
-          if (!disposed) tui.requestRender();
-        }
-      };
-      const unsubscribe = data.onBranchChange(() => {
-        gitStatus = undefined;
-        void refreshGit();
-        tui.requestRender();
-      });
-      // Git I/O happens asynchronously outside render; overlapping reads are skipped.
-      const timer = setInterval(() => {
-        void refreshGit();
-        tui.requestRender();
-      }, 1000);
+      let tickerFrame = 0;
+      // Animation is local terminal rendering, never a model/tool request.
+      const animation = setInterval(() => {
+        if (footerMotion) { tickerFrame++; tui.requestRender(); }
+      }, 150);
+      animation.unref();
+      // Keep tool availability fresh even while animation is paused.
+      const timer = setInterval(() => tui.requestRender(), 1000);
       timer.unref();
-      void refreshGit();
       const dispose = () => {
         if (disposed) return;
         disposed = true;
         clearInterval(timer);
-        controller.abort();
-        unsubscribe();
+        clearInterval(animation);
       };
       disposeFooter = dispose;
       return {
@@ -168,23 +233,6 @@ export default function (pi: ExtensionAPI) {
         invalidate() {},
         render(width: number): string[] {
           const theme = ctx.ui.theme;
-          const paint = (line: string) => {
-            const fitted = fit(line, width);
-            return theme.bg("userMessageBg", fitted + " ".repeat(Math.max(0, width - visibleWidth(fitted))));
-          };
-          const branch = gitStatus
-            ? (gitStatus.branch === "(detached)" ? "detached HEAD" : gitStatus.branch)
-            : (data.getGitBranch() ?? "geen branch");
-          const changes = gitStatus
-            ? (gitStatus.changed === 0
-              ? theme.fg("success", " ✓")
-              : theme.fg("accent", ` ●${gitStatus.changed} (${gitStatus.staged} staged${gitStatus.untracked ? `, ${gitStatus.untracked} nieuw` : ""}${gitStatus.conflicts ? `, ${gitStatus.conflicts} conflict` : ""})`))
-            : theme.fg("muted", gitStatus === undefined ? " …" : " Git ?");
-          const sync = gitStatus && gitStatus.branch !== "(detached)"
-            ? (gitStatus.ahead === null
-              ? theme.fg("muted", " · geen upstream")
-              : theme.fg("accent", ` ↑${gitStatus.ahead} ↓${gitStatus.behind}`))
-            : "";
           const activeTools = new Set(pi.getActiveTools());
           // Deferred/codemode tools remain callable without being active.
           const availableTools = pi.getAllTools().filter(tool =>
@@ -195,36 +243,26 @@ export default function (pi: ExtensionAPI) {
           const ownToolCount = availableTools.filter(tool =>
             dirname(resolve(ctx.cwd, tool.sourceInfo.path)) === OWN_EXTENSION_DIR
           ).length;
-          const idle = ctx.isIdle();
-          const separator = theme.fg("muted", " | ");
+          const newEntries = ctx.sessionManager.getBranch().slice(tokenBaseline);
+          const hasNewUser = newEntries.some(entry => entry.type === "message" && entry.message.role === "user");
+          const inputTokens = hasNewUser ? latestMessageInputTokens(newEntries) : 0;
           const line = [
-            theme.fg("success", "π OomAgent"),
-            theme.fg("muted", branch) + changes + sync,
-            theme.fg("accent", `${ownToolCount} eigen`),
-            theme.fg("accent", `${availableTools.length} totaal`),
-            theme.fg(idle ? "success" : "accent", idle ? "Ready ✓" : "Working…"),
-          ].join(separator);
-          const usage = ctx.getContextUsage();
-          const percent = usage?.percent;
-          const contextLabel = percent != null && Number.isFinite(percent)
-            ? `Context ${Math.round(percent)}%`
-            : "Context —";
-          const contextColor = percent != null && percent >= 90 ? "error"
-            : percent != null && percent >= 75 ? "warning" : "muted";
-          const model = ctx.model?.id ?? "geen model";
-          // Put context before long names so it remains visible on narrow terminals.
-          const details = [
-            theme.fg(contextColor, contextLabel),
-            theme.fg("text", basename(ctx.cwd) || ctx.cwd),
-            theme.fg("accent", model),
-          ].join(separator);
-          const statuses = [...data.getExtensionStatuses().values()].join(separator);
-          return [paint(line), paint(details + (statuses ? separator + statuses : ""))];
+            theme.fg("muted", "Tokens: ") + theme.fg("text", inputTokens === undefined ? "—" : inputTokens.toLocaleString("nl-NL")),
+            theme.fg("muted", "Tools: ") + theme.fg("accent", String(availableTools.length)),
+            theme.fg("muted", "Eigen tools: ") + theme.fg("accent", String(ownToolCount)),
+          ].join(theme.fg("dim", "  |  "));
+          const tickerWidth = Math.min(28, width - visibleWidth(line) - 3);
+          const ticker = tickerWidth >= FOOTER_BANNER.length
+            ? "   " + renderFooterTicker(tickerWidth, tickerFrame, theme)
+            : "";
+          const fitted = fit(line + ticker, width);
+          return [theme.bg("userMessageBg", fitted + " ".repeat(Math.max(0, width - visibleWidth(fitted))))];
         },
       };
     } : undefined);
   };
 
+  let treeEnabled = true;
   let active = false;
   let splash = false;
   let motion = false;
@@ -238,7 +276,7 @@ export default function (pi: ExtensionAPI) {
     const width = Math.max(0, Math.min(context.availableWidth, 110));
     const user = context.messageType === "user";
     const theme = currentTheme();
-    const color = user ? "borderMuted" : "accent";
+    const color = user ? "warning" : "accent";
     const top = theme.fg(color, messageBorder(user ? "Mouad" : "pi-Oomagent", width));
     // Leave streaming content untouched below the heading until it completes.
     const bottom = context.isStreaming ? "" : `\n\n${theme.fg(color, messageBorder("", width, true))}`;
@@ -248,6 +286,7 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_start", (_event, ctx) => {
     if (ctx.mode !== "tui" || !ctx.hasUI) return;
     active = true;
+    tokenBaseline = ctx.sessionManager?.getBranch().length ?? 0;
     installFooter(ctx);
     currentTheme = () => ctx.ui.theme;
     splash = false;
@@ -263,6 +302,25 @@ export default function (pi: ExtensionAPI) {
       disposeHeader?.();
       let disposed = false;
       redraw = () => tui.requestRender();
+      let tree: ProjectTreeEntry[] | undefined;
+      let treeError = false;
+      let readingTree = false;
+      const refreshTree = async () => {
+        if (disposed || readingTree || !treeEnabled || !ctx.cwd) return;
+        readingTree = true;
+        try {
+          const next = await readProjectTree(ctx.cwd);
+          if (!disposed) { tree = next; treeError = false; }
+        } catch {
+          if (!disposed) { tree = undefined; treeError = true; }
+        } finally {
+          readingTree = false;
+          if (!disposed) tui.requestRender();
+        }
+      };
+      const treeTimer = setInterval(() => { void refreshTree(); }, 5000);
+      treeTimer.unref();
+      void refreshTree();
       const timer = setInterval(() => {
         if (motion && splash && !disposed) { frame++; tui.requestRender(); }
       }, 200);
@@ -271,6 +329,7 @@ export default function (pi: ExtensionAPI) {
         if (disposed) return;
         disposed = true;
         clearInterval(timer);
+        clearInterval(treeTimer);
       };
       disposeHeader = dispose;
       return {
@@ -279,25 +338,46 @@ export default function (pi: ExtensionAPI) {
         render(width: number): string[] {
           const theme = ctx.ui.theme;
           const paint = (text: string) => theme.bg("userMessageBg", fit(text, width));
+          const withTree = (lines: string[]) => treeEnabled && ctx.cwd
+            ? renderProjectPanel(lines, tree, ctx.cwd, width, theme, treeError)
+            : lines;
           if (!splash || width < 48) {
-            return [
-              paint(theme.bold(theme.fg("accent", `◈ ${BRAND}`)) + theme.fg("muted", "  /  coding workspace")),
-              paint(theme.fg("muted", "Stel een vraag of geef een opdracht · /help")),
-            ];
+            const yellow = (text: string) => theme.fg("warning", text);
+            const title = theme.bold(theme.fg("text", BRAND));
+            const panel = (text: string) => {
+              const clipped = fit(text, width);
+              return paint(clipped + " ".repeat(Math.max(0, width - visibleWidth(clipped))));
+            };
+            if (width < 48) {
+              return withTree([
+                panel(theme.fg("accent", "◎ · · ") + title),
+                panel(theme.fg("accent", "┆ ") + theme.fg("muted", "Geef je opdracht · /help")),
+              ]);
+            }
+            return withTree([
+              panel(theme.fg("accent", "◎ ") + title + theme.fg("muted", "  /  ENGINEERING WORKSPACE")),
+              panel(theme.fg("accent", "┆ ") + theme.fg("muted", "Inspecteren  ·  Bouwen  ·  Verifiëren")),
+              panel(yellow("› ") + theme.fg("text", "/help") + theme.fg("muted", "   /model   /settings   /oom-tree")),
+              panel(theme.fg("accent", "╰ ") + theme.fg("dim", "┄".repeat(Math.max(0, width - 2)))),
+            ]);
           }
           const scene = sceneLines(frame);
           const sceneWidth = Math.min(width, 64);
           const pad = " ".repeat(Math.max(0, Math.floor((width - sceneWidth) / 2)));
-          return [
-            paint(theme.fg("accent", "WELCOME TO OOM AGENT")),
+          return withTree([
+            paint(theme.fg("accent", "◎ OOMAGENT / ORBITAL NETWORK")),
             ...scene.map(line => paint(pad + line.slice(0, sceneWidth).map(cell => theme.fg(cell.ink, cell.text)).join(""))),
             paint(theme.fg("muted", "Typ je bericht om te starten · /oom-screen · /oom-motion")),
-          ];
+          ]);
         },
       };
     });
     // Remove the legacy animated widget; branding now lives in the compact header.
     ctx.ui.setWidget("oomagent-multiverse", undefined);
+  });
+
+  pi.on("session_tree", (_event, ctx) => {
+    tokenBaseline = ctx.sessionManager.getBranch().length;
   });
 
   pi.on("before_agent_start", () => {
@@ -321,8 +401,16 @@ export default function (pi: ExtensionAPI) {
       installFooter(ctx);
     },
   });
+  pi.registerCommand("oom-tree", {
+    description: "Show or hide the project folder panel",
+    handler: async (_args, ctx) => {
+      if (ctx.mode !== "tui" || !ctx.hasUI) return;
+      treeEnabled = !treeEnabled;
+      redraw?.();
+    },
+  });
   pi.registerCommand("oom-screen", {
-    description: "Show or hide the Swiss Alps / multiverse welcome scene",
+    description: "Show or hide the orbital node network",
     handler: async (_args, ctx) => {
       if (ctx.mode !== "tui" || !ctx.hasUI) return;
       splash = !splash;
@@ -330,12 +418,13 @@ export default function (pi: ExtensionAPI) {
     },
   });
   pi.registerCommand("oom-motion", {
-    description: "Pause or resume the multiverse and waterfall animation",
+    description: "Pause or resume the orbital link animation",
     handler: async (_args, ctx) => {
       if (ctx.mode !== "tui" || !ctx.hasUI) return;
-      motion = !motion;
+      footerMotion = !footerMotion;
+      motion = footerMotion;
       redraw?.();
-      ctx.ui.notify(`OomAgent animation ${motion ? "on" : "off"}.`, "info");
+      ctx.ui.notify(`OomAgent animation ${footerMotion ? "on" : "off"}.`, "info");
     },
   });
 }

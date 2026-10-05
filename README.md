@@ -6,12 +6,17 @@ Start Pi from this repository and approve project trust after reviewing the conf
 
 - `AGENTS.md`: repository instructions.
 - `.pi/settings.json`: enables `grep`, `find`, `ls`, `codemode`, and `tool_search` alongside the inherited default tools.
-- `.pi/APPEND_SYSTEM.md`: additional project system instructions.
+- `.pi/APPEND_SYSTEM.md`: symlink to `.pi/system-prompt.md`, containing the always-available persona and safety guidance.
+- `.pi/extensions/oomagent-context.ts`: omits local `AGENTS.md`/`AGENTS.override.md`/`CLAUDE.md` content from the model prompt for exact greetings and thanks before a task in the active branch. Real tasks, ambiguous messages and image attachments keep all rules; after a task, follow-ups keep them too. Ancestor/user instructions are never removed. Pi still discovers these files locally; this changes model context, not filesystem loading or access permissions.
 - `.pi/extensions/oomagent-tools.ts`: read-only `project_info` tool returning the working directory, Git branch, and repository root. Unavailable Git values are `null`; detached HEAD has no branch.
 - `.pi/skills/`: shared intake, debugging, review and agent-delivery workflows.
 - `.pi/prompts/`: shared prompt templates.
 
 Pi loads the TypeScript extensions directly and supplies their peer dependencies; no build step is needed.
+
+`AGENTS.md` contains the ten-step development workflow: understand → Serena exploration → impact analysis → small plan → targeted changes → automated checks → functional validation → investigate failures → diff review → concise report. It is omitted from a greeting-only model request and included when work starts.
+
+After `/reload`, start a **new session** to evaluate greeting context: existing conversations retain earlier instructions and tool output. Aim for roughly 3,000 input tokens, but verify the footer after a fresh `hi`; model/tool/MCP configuration affects the total. The automated context tests check prompt sections and transitions, not provider token counts or generated answers.
 
 ## Shared agent-delivery skills
 
@@ -25,17 +30,18 @@ Each skill includes a report template under its `assets/` directory. These are i
 
 ## OomAgent interface
 
-The `oomagent-swiss` theme and `.pi/extensions/oomagent-ui.ts` provide a professional dark workspace: a compact OomAgent header, turquoise accents, slate panels, a subtle user divider and a turquoise assistant divider. The existing theme name is kept for compatibility. Tools and MCP configuration are unchanged.
+The `oomagent-swiss` theme and `.pi/extensions/oomagent-ui.ts` provide an EVE Planetary Interaction-inspired orbital workspace: charcoal panels, amber/turquoise node rings, dotted links, a restrained engineering header, a project folder panel and node-style message dividers. This is a terminal adaptation, not a graphical replica. The existing theme name is kept for compatibility. Tools and MCP configuration are unchanged.
 
-The footer has two compact lines: Git/tool/activity status, followed by context usage, project name, model and other extensions' status messages. Unknown context usage is shown as `—`, not zero. Context turns amber at 75% and red at 90%. Long lines are truncated to terminal width, including ANSI and wide characters. Data is refreshed while idle as well as during work.
+The footer shows input tokens for the latest user message since reload (including cache reads/writes, excluding tool follow-up requests), available tools and this package’s own tools. After `/reload` or a session switch the display starts at `0`; pending usage is `—`. This is a display reset, not deletion of conversation history, provider usage or actual context. An `Oomagent-Mouad` neon ticker bounces continuously left to right and back in spare columns; narrow terminals prioritize the counters. Animation is local rendering and makes no model requests. The single line fits terminal width, including ANSI and wide characters.
 
-The large Swiss Alps scene remains optional; both the scene and animation are off by default.
+The larger orbital node network remains optional; both the scene and link animation are off by default.
 
 - `/oom-screen`: show/hide the large welcome scene (also useful after `/reload`).
-- `/oom-motion`: pause/resume animation.
-- `/oom-footer`: toggle the compact two-line footer (`π OomAgent | <branch> | <eigen> eigen | <totaal> totaal | Ready ✓`) or restore Pi’s default footer. The Git segment shows the branch, `✓` for a clean working tree or `●N` for the number of files still to commit (including staged, unstaged and untracked files, counting each file once). It also shows the staged subset, new files and conflicts where applicable. `↑N ↓N` are commits ahead of/behind the configured upstream based on local refs; no network fetch is performed. Without an upstream it says `geen upstream`; detached HEAD omits sync counts. Git reads run asynchronously with a three-second timeout, outside rendering; unavailable status shows `Git ?`, not a misleading clean state. The tool count includes active tools plus callable codemode/deferred tools, excluding hidden and inactive direct/model-only tools. The own-tool count is the available subset whose source file is in this package’s `.pi/extensions/` directory; both counts use runtime metadata, not fixed tool names or numbers. Values are read on each render, with a one-second refresh even when animation is paused. While the agent works, status is `Working…`; without a branch it shows `geen branch`.
-- The editor uses turquoise borders. Markdown remains intact; message borders are top/bottom dividers, not full native message boxes.
-- For a matching full viewport, set your terminal profile's background to `#0b121c`. The theme colors panels but does not change global terminal preferences.
+- `/oom-tree`: show/hide the project folder panel (on by default). At 110 columns or wider it sits beside the header; narrower terminals stack a short preview below it. Folder/file icons are `📁`/`📄`. It asynchronously refreshes filenames every five seconds, shows a bounded two-level preview, skips symlinks, `.env` files, `.git`, `.serena` and `node_modules`, and sanitizes terminal control characters. It does not read file contents or contact Serena/MCP. Loading, empty and unreadable states are explicit; filesystem errors do not interrupt the interface. This is a header panel, not a full-height file explorer.
+- `/oom-motion`: pause/resume the neon footer ticker and optional node-link animation. The ticker starts enabled; tool counts still refresh while paused.
+- `/oom-footer`: toggle the single-line footer (`Tokens: … | Tools: … | Eigen tools: …`) or restore Pi’s default footer. Tools counts active tools plus callable codemode/deferred tools, excluding hidden and inactive direct/model-only tools. Eigen tools is the available subset whose source file is in this package’s `.pi/extensions/` directory. Counts use runtime metadata and refresh every second, even when animation is paused. The neon ticker advances every 150 ms when enabled.
+- The editor uses turquoise borders; user dividers are amber and assistant dividers turquoise. Markdown remains intact; dotted node borders are top/bottom dividers, not full native message boxes.
+- For a matching full viewport, set your terminal profile's background to `#101214`. The theme colors panels but does not change global terminal preferences.
 - UI customization runs only in interactive terminal mode, not RPC/print mode. Timers are cleaned up on disposal and session shutdown.
 
 ## Local commit and push checks

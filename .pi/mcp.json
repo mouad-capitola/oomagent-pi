@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "lightpanda": {
+      "command": "~/.local/bin/lightpanda",
+      "args": [
+        "mcp",
+        "--block-private-networks",
+        "--block-cidrs",
+        "-127.0.0.1/32",
+        "--obey-robots"
+      ],
+      "exposure": "codemode",
+      "description": "Lightpanda-browser: webpagina's bezoeken, lezen en bedienen"
+    }
+  }
+}

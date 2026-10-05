@@ -1,5 +1,9 @@
 {
   "defaultTools": ["+grep", "+find", "+ls", "+codemode", "+tool_search"],
+  "codemode": {
+    "mode": "only",
+    "inlineBudget": 0
+  },
   "theme": "oomagent-swiss",
   "tuiMode": "fullscreen"
 }

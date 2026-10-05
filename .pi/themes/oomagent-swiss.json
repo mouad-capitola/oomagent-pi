@@ -3,71 +3,89 @@
   "name": "oomagent-swiss",
   "appearance": "dark",
   "vars": {
-    "black": "#111b27",
-    "white": "#e4edf5",
-    "red": "#ff7b86",
-    "green": "#70dba7",
-    "cyan": "#53dacb",
-    "violet": "#b9a4ef",
-    "muted": "#a3b3c4"
+    "black": "#101214",
+    "white": "#e3e5e5",
+    "red": "#ed6a5a",
+    "green": "#e8bd48",
+    "cyan": "#19c9c5",
+    "violet": "#d9cb72",
+    "muted": "#939b9d"
   },
   "colors": {
     "accent": "cyan",
-    "border": "#52667d",
+    "border": "#42494b",
     "borderAccent": "cyan",
-    "borderMuted": "#52667d",
+    "borderMuted": "#303638",
+
     "success": "green",
     "error": "red",
-    "warning": "#ffd166",
+    "warning": "#f0b547",
+
     "muted": "muted",
-    "dim": "#8193a8",
+    "dim": "#657174",
     "text": "white",
-    "thinkingText": "muted",
-    "selectedBg": "#24394b",
-    "scrollbarTrack": "#182536",
-    "scrollbarThumb": "muted",
-    "searchMatchBg": "#493714",
+    "thinkingText": "#9ca8aa",
+
+    "selectedBg": "#17393a",
+
+    "scrollbarTrack": "#151a1b",
+    "scrollbarThumb": "#426163",
+
+    "searchMatchBg": "#494020",
     "searchMatchText": "white",
-    "userMessageBg": "black",
+
+    "userMessageBg": "#191e20",
     "userMessageText": "white",
-    "customMessageBg": "black",
+
+    "customMessageBg": "#1c2426",
     "customMessageText": "white",
     "customMessageLabel": "cyan",
-    "toolPendingBg": "#172536",
-    "toolSuccessBg": "#142c29",
-    "toolErrorBg": "#321f2a",
+
+    "toolPendingBg": "#1a3032",
+    "toolSuccessBg": "#292c20",
+    "toolErrorBg": "#342120",
     "toolTitle": "cyan",
-    "toolOutput": "muted",
-    "mdHeading": "white",
+    "toolOutput": "#b1bebf",
+
+    "mdHeading": "#f0efdc",
     "mdLink": "cyan",
-    "mdLinkUrl": "muted",
+    "mdLinkUrl": "#859698",
     "mdCode": "violet",
-    "mdCodeBlock": "white",
-    "mdCodeBlockBorder": "muted",
-    "mdQuote": "muted",
+    "mdCodeBlock": "#d4dedd",
+    "mdCodeBlockBorder": "#42585a",
+
+    "mdQuote": "#a2adad",
     "mdQuoteBorder": "cyan",
-    "mdHr": "muted",
-    "mdListBullet": "green",
-    "toolDiffAdded": "green",
+    "mdHr": "#385456",
+    "mdListBullet": "#e8bd48",
+
+    "toolDiffAdded": "#9dcc8b",
     "toolDiffRemoved": "red",
-    "toolDiffContext": "muted",
-    "syntaxComment": "muted",
+    "toolDiffContext": "#859394",
+
+    "syntaxComment": "#718082",
     "syntaxKeyword": "violet",
     "syntaxFunction": "cyan",
     "syntaxVariable": "white",
-    "syntaxString": "green",
-    "syntaxNumber": "#ffd166",
-    "syntaxType": "violet",
-    "syntaxOperator": "muted",
-    "syntaxPunctuation": "muted",
-    "thinkingOff": "muted",
-    "thinkingMinimal": "#8193a8",
-    "thinkingLow": "#8ebfcb",
+    "syntaxString": "#9dcc8b",
+    "syntaxNumber": "#f0b547",
+    "syntaxType": "#9bbfbd",
+    "syntaxOperator": "#8e9e9f",
+    "syntaxPunctuation": "#8e9e9f",
+
+    "thinkingOff": "#5d6a6b",
+    "thinkingMinimal": "#78898a",
+    "thinkingLow": "#70aaa8",
     "thinkingMedium": "cyan",
-    "thinkingHigh": "#8aadef",
+    "thinkingHigh": "#70d2cb",
     "thinkingXhigh": "violet",
-    "thinkingMax": "#e8a6d8",
-    "bashMode": "#ffd166"
+    "thinkingMax": "#eee0a3",
+
+    "bashMode": "#f0b547"
   },
-  "export": { "pageBg": "#0b121c", "cardBg": "#111b27", "infoBg": "#172536" }
+  "export": {
+    "pageBg": "#101214",
+    "cardBg": "#191e20",
+    "infoBg": "#1c292b"
+  }
 }

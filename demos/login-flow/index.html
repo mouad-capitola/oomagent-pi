@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="nl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Login-testdemo</title>
+  <style>
+    body { font: 18px system-ui; background: #f4f6fa; margin: 0; }
+    main { max-width: 420px; margin: 10vh auto; padding: 32px; background: white; border-radius: 16px; }
+    label, input, button { display: block; margin: 12px 0; }
+    input, button { box-sizing: border-box; width: 100%; padding: 12px; font: inherit; }
+    button { cursor: pointer; }
+    [hidden] { display: none !important; }
+  </style>
+  <script src="/auth.js" defer></script>
+  <script src="/app.js" defer></script>
+</head>
+<body>
+<main>
+  <h1>Login-testdemo</h1>
+  <p>Alleen een lokale UI-demo; geen echte authenticatie.</p>
+  <section id="login-view">
+    <p>Testaccount: <code>demo@example.test</code> / <code>Demo123!</code></p>
+    <form id="login-form">
+      <label for="email">E-mailadres</label>
+      <input id="email" name="email" type="email" autocomplete="username" required>
+      <label for="password">Wachtwoord</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required>
+      <button id="login-button" type="submit">Inloggen</button>
+      <p id="error" role="alert" hidden></p>
+    </form>
+  </section>
+  <section id="dashboard" hidden>
+    <h2>Welkom, Demo!</h2>
+    <p>Je bent ingelogd.</p>
+    <button id="logout-button" type="button">Uitloggen</button>
+  </section>
+</main>
+</body>
+</html>
