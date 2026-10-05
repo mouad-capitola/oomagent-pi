@@ -5,26 +5,20 @@ import { readdir, realpath } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { CustomEditor, type ExtensionAPI, type ExtensionContext, type Theme } from "@earendil-works/pi-coding-agent";
 import { sessionTokenUsage } from "../lib/footer-metrics.ts";
-import { rgbColor, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
 const execFileAsync = promisify(execFile);
 const OWN_EXTENSION_DIR = dirname(fileURLToPath(import.meta.url));
 const BRAND = "OomAgent";
 const FOOTER_BANNER = "Oomagent-Mouad";
-const NEON_COLORS = [
-  rgbColor(0, 255, 240), rgbColor(255, 60, 225),
-  rgbColor(175, 95, 255), rgbColor(90, 255, 120),
-];
 
 export function renderFooterTicker(width: number, frame: number, theme: Theme): string {
   const columns = Math.max(0, width);
   const distance = Math.max(0, columns - FOOTER_BANNER.length);
   const phase = distance > 0 ? frame % (2 * distance) : 0;
   const position = phase <= distance ? phase : 2 * distance - phase;
-  const neon = [...FOOTER_BANNER].map((char, i) =>
-    theme.style(char, { fg: NEON_COLORS[(i + frame) % NEON_COLORS.length], bold: true })
-  ).join("");
-  const clipped = truncateToWidth(" ".repeat(position) + neon, columns, "");
+  const banner = theme.style(FOOTER_BANNER, { fg: "text", bold: true });
+  const clipped = truncateToWidth(" ".repeat(position) + banner, columns, "");
   return clipped + " ".repeat(Math.max(0, columns - visibleWidth(clipped)));
 }
 type Ink = "text" | "muted" | "accent" | "success" | "error";
@@ -168,9 +162,9 @@ export function sceneLines(frame: number): { text: string; ink: Ink }[][] {
 
 export function messageBorder(label: string, width: number, bottom = false): string {
   if (width < 4) return "";
-  if (bottom) return `╰${"┄".repeat(width - 2)}◎`;
+  if (bottom) return `┗${"━".repeat(width - 2)}┛`;
   const title = fit(` ${label} `, width - 2);
-  return `◎${title}${"┄".repeat(Math.max(0, width - visibleWidth(title) - 2))}╮`;
+  return `┏${title}${"━".repeat(Math.max(0, width - visibleWidth(title) - 2))}┓`;
 }
 
 class BrandEditor extends CustomEditor {
@@ -257,10 +251,10 @@ export default function (pi: ExtensionAPI) {
     const width = Math.max(0, Math.min(context.availableWidth, 110));
     const user = context.messageType === "user";
     const theme = currentTheme();
-    const color = user ? "warning" : "accent";
-    const top = theme.fg(color, messageBorder(user ? "Mouad" : "pi-Oomagent", width));
+    const color = user ? "borderMuted" : "borderAccent";
+    const top = theme.bold(theme.fg(color, messageBorder(user ? "Mouad" : "pi-Oomagent", width)));
     // Leave streaming content untouched below the heading until it completes.
-    const bottom = context.isStreaming ? "" : `\n\n${theme.fg(color, messageBorder("", width, true))}`;
+    const bottom = context.isStreaming ? "" : `\n\n${theme.bold(theme.fg(color, messageBorder("", width, true)))}`;
     return `${top}\n\n${markdown}${bottom}`;
   });
 
@@ -276,7 +270,7 @@ export default function (pi: ExtensionAPI) {
     ctx.ui.setTitle(BRAND);
     ctx.ui.setEditorComponent((tui, theme, keys) => {
       const editor = new BrandEditor(tui, theme, keys);
-      editor.brandBorder = text => ctx.ui.theme.fg("accent", text);
+      editor.brandBorder = text => ctx.ui.theme.bold(ctx.ui.theme.fg("borderMuted", text.replaceAll("─", "━")));
       return editor;
     });
     ctx.ui.setHeader(tui => {

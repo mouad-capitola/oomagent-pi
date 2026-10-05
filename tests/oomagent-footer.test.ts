@@ -111,7 +111,7 @@ await test("footer shows only tokens and available tools; toggles and disposes",
   handlers.get("session_shutdown")();
 });
 
-await test("neon footer text bounces continuously and fits narrow widths", () => {
+await test("footer text follows the theme, bounces continuously and fits narrow widths", () => {
   const colors = [];
   const theme = { style: (text, options) => { colors.push(options.fg); return text; } };
   const banner = "Oomagent-Mouad";
@@ -130,7 +130,7 @@ await test("neon footer text bounces continuously and fits narrow widths", () =>
       assert.equal(renderFooterTicker(width, frame, theme).indexOf(banner), expected);
     }
   }
-  assert.equal(new Set(colors.map(color => JSON.stringify(color))).size, 4);
+  assert.deepEqual([...new Set(colors)], ["text"]);
   for (const width of [0, 1, 10, 13, 14, 28, 80]) {
     for (const frame of [0, 1, 15, 100]) assert.equal(visibleWidth(renderFooterTicker(width, frame, theme)), width);
   }
@@ -275,11 +275,12 @@ await test("orbital header and message dividers fit narrow terminals and follow 
   let headerFactory;
   let transform;
   let selectedTheme;
+  let editorFactory;
   const ctx = {
     mode: "tui", hasUI: true,
     ui: {
       theme: { fg: (_color, text) => text, bg: (_color, text) => text, bold: text => text },
-      setFooter() {}, setTitle() {}, setEditorComponent() {},
+      setFooter() {}, setTitle() {}, setEditorComponent: factory => { editorFactory = factory; },
       setHeader: factory => { headerFactory = factory; },
       setWidget: (_key, widget) => assert.equal(widget, undefined),
       setTheme: name => { selectedTheme = name; return { success: true }; },
@@ -301,8 +302,8 @@ await test("orbital header and message dividers fit narrow terminals and follow 
     assert.match(header.render(40)[0], /OomAgent/);
     assert.equal(header.render(40).length, 2);
     ctx.ui.theme = {
-      fg: (_color, text) => `\x1b[36m${text}\x1b[0m`,
-      bg: (_color, text) => text, bold: text => text,
+      fg: (color, text) => `\x1b[${color === "borderMuted" ? 31 : color === "borderAccent" ? 32 : 36}m${text}\x1b[0m`,
+      bg: (_color, text) => text, bold: text => `\x1b[1m${text}\x1b[22m`,
     };
     for (const width of [0, 1, 10, 40, 47, 48, 80, 120]) {
       const lines = header.render(width);
@@ -312,11 +313,19 @@ await test("orbital header and message dividers fit narrow terminals and follow 
     }
     const markdown = "**Hello**\n\n```python\nprint('hello')\n```";
     const output = transform(markdown, { messageType: "user", availableWidth: 80, isStreaming: false });
-    assert.match(output, /Mouad/);
+    assert.match(output, /\x1b\[1m\x1b\[31m┏ Mouad /);
+    assert.match(output, /┗━+┛/);
     assert.ok(output.includes(markdown), "Markdown content stays intact");
+    const editor = editorFactory({}, {}, {});
+    assert.equal(editor.brandBorder("───"), "\x1b[1m\x1b[31m━━━\x1b[0m\x1b[22m");
     const streaming = transform(markdown, { messageType: "assistant", availableWidth: 80, isStreaming: true });
-    assert.match(streaming, /pi-Oomagent/);
-    assert.ok(!streaming.includes("╰"), "no closing divider while streaming");
+    assert.match(streaming, /\x1b\[1m\x1b\[32m┏ pi-Oomagent /);
+    assert.ok(!streaming.includes("┗"), "no closing divider while streaming");
+    const completed = transform(markdown, { messageType: "assistant", availableWidth: 80, isStreaming: false });
+    assert.match(completed, /\x1b\[1m\x1b\[32m┗━+┛/);
+    assert.ok(completed.includes(markdown));
+    assert.equal(transform(markdown, { messageType: "assistant-thinking", availableWidth: 80, isStreaming: false }), markdown);
+    assert.equal(transform("", { messageType: "user", availableWidth: 80, isStreaming: false }), "");
     commands.get("oom-screen").handler("", ctx);
     assert.match(header.render(100)[0], /ORBITAL NETWORK/);
     for (const width of [48, 64, 80, 120]) {
@@ -330,7 +339,7 @@ await test("orbital header and message dividers fit narrow terminals and follow 
   }
 });
 
-await test("orbital node scene and dotted dividers stay within terminal columns", () => {
+await test("orbital node scene and heavy dividers stay within terminal columns", () => {
   for (const frame of [0, 1, 20]) {
     const scene = sceneLines(frame);
     assert.equal(scene.length, 11);
@@ -343,7 +352,9 @@ await test("orbital node scene and dotted dividers stay within terminal columns"
       assert.ok(visibleWidth(border) <= width);
       if (width >= 4) {
         assert.equal(visibleWidth(border), width);
-        assert.ok(border.includes("◎"));
+        assert.ok(border.startsWith(bottom ? "┗" : "┏"));
+        assert.ok(border.endsWith(bottom ? "┛" : "┓"));
+        assert.ok(!border.includes("┄"));
       }
     }
   }
@@ -461,10 +472,27 @@ await test("theme validates with Pi's loader", async () => {
   const theme = loadThemeFromPath(fileURLToPath(new URL("../.pi/themes/oomagent-swiss.json", import.meta.url)));
   assert.equal(theme.name, "oomagent-swiss");
   assert.equal(theme.appearance, "dark");
+  const palette = JSON.parse(await readFile(new URL("../.pi/themes/oomagent-swiss.json", import.meta.url), "utf8"));
+  for (const role of ["customMessageBg", "toolPendingBg", "toolSuccessBg", "toolErrorBg"]) {
+    assert.equal(palette.colors[role], palette.colors.userMessageBg, `${role} matches the user text box`);
+    assert.equal(theme.bg(role, "output"), theme.bg("userMessageBg", "output"));
+  }
+  assert.equal(palette.vars.white, "#ffffff");
+  for (const [role, value] of Object.entries(palette.colors)) {
+    if (role.endsWith("Bg")) {
+      assert.equal(value, "", `${role} uses the terminal background`);
+      assert.equal(theme.getBgAnsi(role), "\x1b[49m");
+    } else {
+      const expected = role === "borderMuted" ? "red" : role === "borderAccent" ? "green" : "white";
+      assert.equal(value, expected, `${role} uses the intended foreground`);
+      if (expected === "white") assert.equal(theme.getFgAnsi(role), theme.getFgAnsi("text"));
+      else assert.notEqual(theme.getFgAnsi(role), theme.getFgAnsi("text"));
+    }
+  }
   assert.ok(theme.fg("accent", "OomAgent").includes("OomAgent"));
   const ticker = renderFooterTicker(28, 1, theme);
   assert.equal(visibleWidth(ticker), 28);
-  assert.ok(ticker.includes("\x1b["), "neon rendering uses terminal color/style escapes");
+  assert.ok(ticker.includes("\x1b["), "footer rendering uses terminal color/style escapes");
 });
 
 await test("non-terminal sessions do not install a footer", () => {
