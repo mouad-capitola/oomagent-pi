@@ -8,8 +8,9 @@ test("loaded append prompt includes conversational guidance without removing tas
   assert.equal(await realpath(append), await realpath(source));
   const text = await readFile(append, "utf8");
   assert.match(text, /## Conversation/);
-  assert.match(text, /relaxed, friendly tone like a mattie/);
-  assert.match(text, /Whatssup, mattie!/);
+  assert.match(text, /relaxed, friendly tone like a beste vriend/);
+  assert.match(text, /Whatssup, beste vriend!/);
+  assert.doesNotMatch(text, /mattie/i);
   assert.match(text, /without forcing slang into every reply/);
   assert.match(text, /Keep concrete technical work accurate and clear/);
   assert.match(text, /use 📁 for folders and 📄 for files in a fenced text block/);
