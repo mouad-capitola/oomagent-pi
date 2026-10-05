@@ -1,9 +1,10 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { basename, dirname, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { readdir, realpath } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { CustomEditor, type ExtensionAPI, type ExtensionContext, type Theme } from "@earendil-works/pi-coding-agent";
+import { sessionTokenUsage } from "../lib/footer-metrics.ts";
 import { rgbColor, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
 const execFileAsync = promisify(execFile);
@@ -30,29 +31,6 @@ type Ink = "text" | "muted" | "accent" | "success" | "error";
 
 function fit(text: string, width: number): string {
   return truncateToWidth(text, Math.max(0, width), "");
-}
-
-// Provider input includes uncached input plus cache reads/writes, not output.
-export function latestMessageInputTokens(entries: readonly {
-  type: string;
-  message?: { role: string; usage?: { input: number; cacheRead: number; cacheWrite: number } };
-}[]): number | undefined {
-  let hasUser = false;
-  let tokens: number | undefined;
-  for (const entry of entries) {
-    if (entry.type !== "message") continue;
-    if (entry.message?.role === "user") {
-      hasUser = true;
-      tokens = undefined;
-    } else if (hasUser && tokens === undefined && entry.message?.role === "assistant") {
-      const usage = entry.message.usage;
-      if (usage) {
-        const total = usage.input + usage.cacheRead + usage.cacheWrite;
-        if (Number.isFinite(total) && total > 0) tokens = total;
-      }
-    }
-  }
-  return tokens;
 }
 
 type FooterGitStatus = {
@@ -206,8 +184,10 @@ class BrandEditor extends CustomEditor {
 export default function (pi: ExtensionAPI) {
   let footerEnabled = true;
   let footerMotion = true;
-  let tokenBaseline = 0;
   let disposeFooter: (() => void) | undefined;
+  // Existing entries are excluded, not deleted. Capture once per start/reload,
+  // not when toggling or recreating the footer component.
+  let usageBaseline = new Set<unknown>();
   const installFooter = (ctx: ExtensionContext) => {
     disposeFooter?.();
     ctx.ui.setFooter(footerEnabled ? (tui) => {
@@ -243,11 +223,12 @@ export default function (pi: ExtensionAPI) {
           const ownToolCount = availableTools.filter(tool =>
             dirname(resolve(ctx.cwd, tool.sourceInfo.path)) === OWN_EXTENSION_DIR
           ).length;
-          const newEntries = ctx.sessionManager.getBranch().slice(tokenBaseline);
-          const hasNewUser = newEntries.some(entry => entry.type === "message" && entry.message.role === "user");
-          const inputTokens = hasNewUser ? latestMessageInputTokens(newEntries) : 0;
+          const entries = ctx.sessionManager.getEntries().filter(entry =>
+            !usageBaseline.has(entry.id ?? entry)
+          );
+          const tokens = sessionTokenUsage(entries);
           const line = [
-            theme.fg("muted", "Tokens: ") + theme.fg("text", inputTokens === undefined ? "—" : inputTokens.toLocaleString("nl-NL")),
+            theme.fg("muted", "Tokens totaal: ") + theme.fg("text", tokens.total.toLocaleString("nl-NL") + (tokens.incomplete ? "*" : "")),
             theme.fg("muted", "Tools: ") + theme.fg("accent", String(availableTools.length)),
             theme.fg("muted", "Eigen tools: ") + theme.fg("accent", String(ownToolCount)),
           ].join(theme.fg("dim", "  |  "));
@@ -286,7 +267,7 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_start", (_event, ctx) => {
     if (ctx.mode !== "tui" || !ctx.hasUI) return;
     active = true;
-    tokenBaseline = ctx.sessionManager?.getBranch().length ?? 0;
+    usageBaseline = new Set((ctx.sessionManager?.getEntries?.() ?? []).map(entry => entry.id ?? entry));
     installFooter(ctx);
     currentTheme = () => ctx.ui.theme;
     splash = false;
@@ -374,10 +355,6 @@ export default function (pi: ExtensionAPI) {
     });
     // Remove the legacy animated widget; branding now lives in the compact header.
     ctx.ui.setWidget("oomagent-multiverse", undefined);
-  });
-
-  pi.on("session_tree", (_event, ctx) => {
-    tokenBaseline = ctx.sessionManager.getBranch().length;
   });
 
   pi.on("before_agent_start", () => {

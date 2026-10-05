@@ -16,7 +16,7 @@ function checkSnapshot(root, revision, base) {
     rmSync(archive);
     const tests = join(temp, "tests");
     if (!existsSync(tests)) throw new Error("Geen tests in de gecontroleerde snapshot.");
-    const testFiles = readdirSync(tests).filter(name => /\.(test|spec)\.(mjs|cjs|js)$/.test(name));
+    const testFiles = readdirSync(tests).filter(name => /\.(test|spec)\.(mjs|cjs|js|ts)$/.test(name));
     if (!testFiles.length) throw new Error("Geen ondersteunde tests in de snapshot.");
     // Reuse installed dependencies without installing or changing packages.
     // Dependency versions are NOT independently verified by this gate.

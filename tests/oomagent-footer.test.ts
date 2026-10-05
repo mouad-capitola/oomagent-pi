@@ -14,11 +14,12 @@ const tuiUrl = pathToFileURL(require.resolve("@earendil-works/pi-tui")).href;
 const { visibleWidth } = await import(tuiUrl);
 
 const source = (await readFile(new URL("../.pi/extensions/oomagent-ui.ts", import.meta.url), "utf8"))
-  .replace(/^import .*pi-coding-agent.*;$/m, "class CustomEditor {}")
+  .replace(/^import .*pi-coding-agent.*;$/m, 'class CustomEditor {}')
+  .replace('"../lib/footer-metrics.ts"', JSON.stringify(new URL("../.pi/lib/footer-metrics.ts", import.meta.url).href))
   .replace('"@earendil-works/pi-tui"', JSON.stringify(tuiUrl))
   .replaceAll("import.meta.url", JSON.stringify(new URL("../.pi/extensions/oomagent-ui.ts", import.meta.url).href));
 const load = text => import(`data:text/javascript;base64,${Buffer.from(stripTypeScriptTypes(text)).toString("base64")}`);
-const { parseFooterGitStatus, readFooterGitStatus, latestMessageInputTokens, messageBorder, sceneLines, readProjectTree, renderProjectPanel, renderFooterTicker } = await load(source);
+const { parseFooterGitStatus, readFooterGitStatus, messageBorder, sceneLines, readProjectTree, renderProjectPanel, renderFooterTicker } = await load(source);
 const { default: register } = await load(source);
 
 await test("footer shows only tokens and available tools; toggles and disposes", async () => {
@@ -47,7 +48,7 @@ await test("footer shows only tokens and available tools; toggles and disposes",
   const ctx = {
     mode: "tui", hasUI: true,
     cwd: dirname(dirname(ownDir.replace(/\/$/, ""))),
-    sessionManager: { getBranch: () => entries },
+    sessionManager: { getBranch: () => entries, getEntries: () => entries },
     ui: {
       theme: {
         fg: (_color, text) => text,
@@ -67,15 +68,16 @@ await test("footer shows only tokens and available tools; toggles and disposes",
   });
   const footer = makeFooter();
   try {
-    assert.equal(footer.render(80)[0].split("   ")[0], "Tokens: 0  |  Tools: 7  |  Eigen tools: 2");
-    assert.match(footer.render(80)[0], /Oomagent-Mouad/);
+    assert.match(footer.render(120)[0], /Tokens totaal: 0.*Tools: 7.*Eigen tools: 2/);
+    assert.doesNotMatch(footer.render(120)[0], /Kosten|\$/);
+    assert.match(footer.render(120)[0], /Oomagent-Mouad/);
     entries = [
-      { type: "message", message: { role: "user" } },
-      { type: "message", message: { role: "assistant", usage: { input: 1000, cacheRead: 200, cacheWrite: 34 } } },
+      { type: "message", message: { role: "user", content: "test" } },
+      { type: "message", message: { role: "assistant", content: [{ type: "text", text: "antwoord" }], usage: { input: 1000, output: 8, cacheRead: 200, cacheWrite: 34 } } },
     ];
-    assert.equal(footer.render(80)[0].split("   ")[0], "Tokens: 1.234  |  Tools: 7  |  Eigen tools: 2");
-    entries.push({ type: "message", message: { role: "user" } });
-    assert.match(footer.render(80)[0], /Tokens: —/);
+    assert.match(footer.render(120)[0], /Tokens totaal: 1\.242.*Tools: 7.*Eigen tools: 2/);
+    entries.push({ type: "message", message: { role: "user", content: "next" } });
+    assert.match(footer.render(120)[0], /Tokens totaal: 1\.242/);
     tools = [...tools, { name: "new-tool", exposure: "deferred", sourceInfo: ownSource }];
     assert.match(footer.render(80)[0], /Tools: 8.*Eigen tools: 3/);
     tools = [...tools, { name: "external-tool", exposure: "deferred", sourceInfo: { path: join(ownDir.replace(/\/$/, "") + "-other", "external.ts") } }];
@@ -84,6 +86,7 @@ await test("footer shows only tokens and available tools; toggles and disposes",
     assert.match(footer.render(80)[0], /Tools: 8.*Eigen tools: 3/);
     await new Promise(resolve => setTimeout(resolve, 1100));
     assert.ok(redraws > 0, "periodic refresh works without header animation");
+    assert.doesNotMatch(footer.render(120)[0], /Kosten|\$/);
     tools = [];
     assert.match(footer.render(80)[0], /Tools: 0.*Eigen tools: 0/);
     ctx.ui.theme = { fg: (_color, text) => `\x1b[32m${text}\x1b[0m`, style: text => `\x1b[36m${text}\x1b[0m`, bg: (_color, text) => text };
@@ -133,16 +136,21 @@ await test("neon footer text bounces continuously and fits narrow widths", () =>
   }
 });
 
-await test("reload zeroes only the footer display, then shows new input including caches", () => {
+await test("reload resets displayed usage without erasing history; toggles and tree keep new usage", async () => {
   const handlers = new Map();
+  const commands = new Map();
   let factory;
+  const entry = (id, input) => ({
+    type: "message", id,
+    message: { role: "assistant", usage: { input, output: 10, cacheRead: 20, cacheWrite: 30 } },
+  });
   let entries = [
-    { type: "message", message: { role: "user" } },
-    { type: "message", message: { role: "assistant", usage: { input: 900, cacheRead: 100, cacheWrite: 0 } } },
+    entry("old", 900),
+    { type: "message", id: "missing-old", message: { role: "assistant" } },
   ];
   const ctx = {
     mode: "tui", hasUI: true, cwd: "/project",
-    sessionManager: { getBranch: () => entries },
+    sessionManager: { getBranch: () => [], getEntries: () => entries.map(e => ({ ...e })) },
     ui: {
       theme: { fg: (_color, text) => text, style: text => text, bg: (_color, text) => text },
       setFooter: value => { factory = value; }, setTheme: () => ({ success: true }),
@@ -150,42 +158,58 @@ await test("reload zeroes only the footer display, then shows new input includin
     },
   };
   register({
-    on: (name, fn) => handlers.set(name, fn), registerCommand() {}, registerMarkdownTransformer() {},
+    on: (name, fn) => handlers.set(name, fn),
+    registerCommand: (name, cmd) => commands.set(name, cmd), registerMarkdownTransformer() {},
     getActiveTools: () => [], getAllTools: () => [],
   });
   let footer;
+  const install = () => { footer = factory({ requestRender() {} }); };
+  const expectUsage = tokens => {
+    const line = footer.render(120)[0];
+    assert.ok(line.includes(`Tokens totaal: ${tokens}`), line);
+    assert.doesNotMatch(line, /Kosten|\$/);
+  };
   try {
-    handlers.get("session_start")({}, ctx);
-    footer = factory({ requestRender() {} });
-    assert.match(footer.render(80)[0], /Tokens: 0/);
-    assert.equal(entries.length, 2, "reload must not erase conversation history");
-    entries.push({ type: "message", message: { role: "user" } });
-    assert.match(footer.render(80)[0], /Tokens: —/);
-    entries.push({ type: "message", message: { role: "assistant", usage: { input: 30, cacheRead: 40, cacheWrite: 50 } } });
-    assert.match(footer.render(80)[0], /Tokens: 120/);
-    handlers.get("session_start")({}, ctx);
-    footer = factory({ requestRender() {} });
-    assert.match(footer.render(80)[0], /Tokens: 0/);
-    assert.equal(entries.length, 4);
+    handlers.get("session_start")({ reason: "startup" }, ctx);
+    install();
+    expectUsage("0");
+    assert.equal(entries.length, 2, "history is not erased");
+    entries.push(entry("new", 1000));
+    expectUsage("1.060");
+    handlers.get("session_tree")?.({}, ctx);
+    expectUsage("1.060");
+    await commands.get("oom-footer").handler("", ctx);
+    assert.equal(factory, undefined);
+    await commands.get("oom-footer").handler("", ctx);
+    install();
+    expectUsage("1.060");
+
+    handlers.get("session_start")({ reason: "reload" }, ctx);
+    install();
+    expectUsage("0");
+    assert.equal(entries.length, 3);
+    entries.push(entry("after-reload", 2000));
+    expectUsage("2.060");
+    entries.push({ type: "usage", id: "warming", usage: {
+      input: 100, output: 0, cacheRead: 20, cacheWrite: 0,
+    } });
+    expectUsage("2.180");
+    entries.push({ type: "message", id: "missing-new", message: { role: "assistant" } });
+    expectUsage("2.180*");
+    handlers.get("session_start")({ reason: "reload" }, ctx);
+    install();
+    expectUsage("0");
+
+    entries = [];
+    handlers.get("session_start")({ reason: "new" }, ctx);
+    install();
+    expectUsage("0");
+    entries.push(entry("first", 0));
+    expectUsage("60");
   } finally {
     footer?.dispose();
     handlers.get("session_shutdown")();
   }
-});
-
-await test("input per user message includes cache and excludes tool follow-up requests", () => {
-  const user = { type: "message", message: { role: "user" } };
-  const assistant = (input, cacheRead = 0, cacheWrite = 0) => ({
-    type: "message", message: { role: "assistant", usage: { input, cacheRead, cacheWrite } },
-  });
-  assert.equal(latestMessageInputTokens([]), undefined);
-  assert.equal(latestMessageInputTokens([assistant(100)]), undefined);
-  assert.equal(latestMessageInputTokens([user]), undefined);
-  assert.equal(latestMessageInputTokens([user, assistant(100, 200, 300), assistant(900)]), 600);
-  assert.equal(latestMessageInputTokens([user, assistant(100), user]), undefined);
-  assert.equal(latestMessageInputTokens([user, assistant(100), user, assistant(20, 30)]), 50);
-  assert.equal(latestMessageInputTokens([user, assistant(0), { type: "custom" }, assistant(40)]), 40);
-  assert.equal(latestMessageInputTokens([user, assistant(NaN), assistant(40)]), 40);
 });
 
 await test("Git parser counts files once, handles renames/newlines and conflicts", () => {

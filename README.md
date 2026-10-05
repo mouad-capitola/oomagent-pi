@@ -16,7 +16,18 @@ Pi loads the TypeScript extensions directly and supplies their peer dependencies
 
 `AGENTS.md` contains the ten-step development workflow: understand → Serena exploration → impact analysis → small plan → targeted changes → automated checks → functional validation → investigate failures → diff review → concise report. It is omitted from a greeting-only model request and included when work starts.
 
-After `/reload`, start a **new session** to evaluate greeting context: existing conversations retain earlier instructions and tool output. Aim for roughly 3,000 input tokens, but verify the footer after a fresh `hi`; model/tool/MCP configuration affects the total. The automated context tests check prompt sections and transitions, not provider token counts or generated answers.
+After `/reload`, start a **new session** to evaluate greeting context: existing conversations retain earlier instructions and tool output. Lazy tool descriptions are already enabled (`codemode.mode: "only"`, `inlineBudget: 0`). The always-loaded prompt is kept compact; verify recorded provider usage after a fresh `hi` with the same model and configuration. No fixed token total is guaranteed: base instructions, skill descriptions, tools and MCP configuration also contribute. The custom footer sums recorded provider usage since its last reset, including full input and cache tokens. The automated context tests check prompt sections and transitions, not provider token counts or generated answers.
+
+## Shared prompt templates
+
+Run `/reload` to load the templates in `.pi/prompts/` as slash commands:
+
+- `/intake [subject]`: clarify goals, scope and acceptance criteria; does not start implementation.
+- `/debugging [problem]`: investigate a bug; changes require an explicit request to fix it.
+- `/code-review [scope or focus]`: read-only review of a diff, files or local changes.
+- `/oplevering [agent or release]`: evidence-based delivery advice, not deployment authorization.
+
+Arguments are optional; templates use the current conversation or ask for missing context. For example: `/code-review "API compatibility"`. Each template delegates to its existing skill, preserves safety boundaries and does not authorize commits or pushes. Prompt templates are reusable instructions, not executable checks or a security boundary.
 
 ## Shared agent-delivery skills
 
@@ -32,14 +43,18 @@ Each skill includes a report template under its `assets/` directory. These are i
 
 The `oomagent-swiss` theme and `.pi/extensions/oomagent-ui.ts` provide an EVE Planetary Interaction-inspired orbital workspace: charcoal panels, amber/turquoise node rings, dotted links, a restrained engineering header, a project folder panel and node-style message dividers. This is a terminal adaptation, not a graphical replica. The existing theme name is kept for compatibility. Tools and MCP configuration are unchanged.
 
-The footer shows input tokens for the latest user message since reload (including cache reads/writes, excluding tool follow-up requests), available tools and this package’s own tools. After `/reload` or a session switch the display starts at `0`; pending usage is `—`. This is a display reset, not deletion of conversation history, provider usage or actual context. An `Oomagent-Mouad` neon ticker bounces continuously left to right and back in spare columns; narrow terminals prioritize the counters. Animation is local rendering and makes no model requests. The single line fits terminal width, including ANSI and wide characters.
+The footer shows `Tokens totaal` for usage recorded **since the last startup, session change or `/reload`**. The counter resets immediately to zero; only new entries then count, including assistant/tool usage, summaries and cache warming across branches. Tree navigation and toggling `/oom-footer` do not reset it. Tokens include input, output, cache-read and cache-write; repeated model context counts again. `*` marks missing/invalid usage. The footer does not calculate or display costs.
+
+Only the displayed counter resets: conversation history and Pi's actual session totals remain unchanged. Reload does not clear model context or reduce the next request's input. No session files are deleted or rewritten.
+
+Available tools and this package’s own tools remain visible. An `Oomagent-Mouad` neon ticker bounces continuously left to right and back in spare columns; narrow terminals prioritize the counters. Animation is local rendering and makes no model requests.
 
 The larger orbital node network remains optional; both the scene and link animation are off by default.
 
 - `/oom-screen`: show/hide the large welcome scene (also useful after `/reload`).
 - `/oom-tree`: show/hide the project folder panel (on by default). At 110 columns or wider it sits beside the header; narrower terminals stack a short preview below it. Folder/file icons are `📁`/`📄`. It asynchronously refreshes filenames every five seconds, shows a bounded two-level preview, skips symlinks, `.env` files, `.git`, `.serena` and `node_modules`, and sanitizes terminal control characters. It does not read file contents or contact Serena/MCP. Loading, empty and unreadable states are explicit; filesystem errors do not interrupt the interface. This is a header panel, not a full-height file explorer.
 - `/oom-motion`: pause/resume the neon footer ticker and optional node-link animation. The ticker starts enabled; tool counts still refresh while paused.
-- `/oom-footer`: toggle the single-line footer (`Tokens: … | Tools: … | Eigen tools: …`) or restore Pi’s default footer. Tools counts active tools plus callable codemode/deferred tools, excluding hidden and inactive direct/model-only tools. Eigen tools is the available subset whose source file is in this package’s `.pi/extensions/` directory. Counts use runtime metadata and refresh every second, even when animation is paused. The neon ticker advances every 150 ms when enabled.
+- `/oom-footer`: toggle the single-line footer (`Tokens totaal: … | Tools: … | Eigen tools: …`) or restore Pi’s default footer. Tools counts active tools plus callable codemode/deferred tools, excluding hidden and inactive direct/model-only tools. Eigen tools is the available subset whose source file is in this package’s `.pi/extensions/` directory. Counts use runtime metadata and refresh every second, even when animation is paused. The neon ticker advances every 150 ms when enabled.
 - The editor uses turquoise borders; user dividers are amber and assistant dividers turquoise. Markdown remains intact; dotted node borders are top/bottom dividers, not full native message boxes.
 - For a matching full viewport, set your terminal profile's background to `#101214`. The theme colors panels but does not change global terminal preferences.
 - UI customization runs only in interactive terminal mode, not RPC/print mode. Timers are cleaned up on disposal and session shutdown.
@@ -67,7 +82,7 @@ Run the current staged checks without committing:
 node scripts/git-preflight.mjs pre-commit
 ```
 
-Requirements: Git, `tar`, a recent Node.js with `stripTypeScriptTypes` support for the existing tests, and the project's already-installed dependencies. No dependencies are installed by the gate. Dependencies are reused from the working tree; lockfile/version consistency is not independently verified. Tests execute trusted repository code with your OS permissions: the temporary snapshot is not a sandbox, and dependency files are shared. Git archive export attributes apply to the snapshot. Only top-level `tests/*.test.{js,mjs,cjs}` and `tests/*.spec.{js,mjs,cjs}` are selected.
+Requirements: Git, `tar`, a recent Node.js with `stripTypeScriptTypes` support for the existing tests, and the project's already-installed dependencies. No dependencies are installed by the gate. Dependencies are reused from the working tree; lockfile/version consistency is not independently verified. Tests execute trusted repository code with your OS permissions: the temporary snapshot is not a sandbox, and dependency files are shared. Git archive export attributes apply to the snapshot. Only top-level `tests/*.test.{ts,js,mjs,cjs}` and `tests/*.spec.{ts,js,mjs,cjs}` are selected.
 
 Local hooks can be bypassed (for example with `--no-verify`) and do not provide server-side enforcement. Use CI and branch protection for a hard guarantee. Existing local hooks must be integrated rather than overwritten if installing this setup elsewhere.
 
