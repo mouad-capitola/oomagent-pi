@@ -8,9 +8,20 @@ Start Pi from this repository and approve project trust after reviewing the conf
 - `.pi/settings.json`: enables `grep`, `find`, `ls`, `codemode`, and `tool_search` alongside the inherited default tools.
 - `.pi/APPEND_SYSTEM.md`: additional project system instructions.
 - `.pi/extensions/oomagent-tools.ts`: read-only `project_info` tool returning the working directory, Git branch, and repository root. Unavailable Git values are `null`; detached HEAD has no branch.
-- `.pi/skills/` and `.pi/prompts/`: reserved for future resources (currently empty; Git does not track empty directories).
+- `.pi/skills/`: shared intake, debugging, review and agent-delivery workflows.
+- `.pi/prompts/`: shared prompt templates.
 
 Pi loads the TypeScript extensions directly and supplies their peer dependencies; no build step is needed.
+
+## Shared agent-delivery skills
+
+Run `/reload` after changes. Pi loads these skills when the task matches their descriptions; invoke them explicitly when needed:
+
+- `/skill:agent-evaluatie`: design or assess repeatable agent tests, including tool correctness, sources, failures and human escalation.
+- `/skill:prompt-injection-review`: review untrusted input, trust boundaries, tool misuse and tenant isolation. Active attack tests require explicit, bounded authorization.
+- `/skill:opleverchecklist`: evidence-based go/no-go advice for customer delivery, including privacy, monitoring, budgets, support and rollback.
+
+Each skill includes a report template under its `assets/` directory. These are instructions, not installed test frameworks or automated deployment gates. They do not authorize production actions, external data transfer, new dependencies or code changes. Unknown or unexecuted checks remain explicit. Existing questionnaire, debugging, code-review and security-review skills are retained.
 
 ## OomAgent interface
 
