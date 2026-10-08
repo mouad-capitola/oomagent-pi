@@ -11,6 +11,21 @@
       ],
       "exposure": "codemode",
       "description": "Lightpanda-browser: webpagina's bezoeken, lezen en bedienen"
+    },
+    "oomagent-pi": {
+      "enabled": false,
+      "command": "python3",
+      "args": [
+        "-m",
+        "uv",
+        "run",
+        "--python",
+        "3.13",
+        "--script",
+        "/Users/buurtkamer/Projects/oomagent-test/oomagent-mcp-pi/server.py"
+      ],
+      "exposure": "codemode",
+      "description": "Lokale MCP bridge naar mijn OomAgent Pi coding agent"
     }
   }
 }

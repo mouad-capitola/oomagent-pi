@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test, mock } from "node:test";
 import { readFile, mkdtemp, writeFile, rm, mkdir, symlink } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -19,10 +19,10 @@ const source = (await readFile(new URL("../.pi/extensions/oomagent-ui.ts", impor
   .replace('"@earendil-works/pi-tui"', JSON.stringify(tuiUrl))
   .replaceAll("import.meta.url", JSON.stringify(new URL("../.pi/extensions/oomagent-ui.ts", import.meta.url).href));
 const load = text => import(`data:text/javascript;base64,${Buffer.from(stripTypeScriptTypes(text)).toString("base64")}`);
-const { parseFooterGitStatus, readFooterGitStatus, messageBorder, sceneLines, readProjectTree, renderProjectPanel, renderFooterTicker } = await load(source);
+const { parseFooterGitStatus, readFooterGitStatus, messageBorder, sceneLines, readProjectTree, renderProjectPanel, renderFooterTicker, layoutFooterGroups } = await load(source);
 const { default: register } = await load(source);
 
-await test("footer shows only tokens and available tools; toggles and disposes", async () => {
+await test("footer preserves tokens and available tools; toggles and disposes", async () => {
   const handlers = new Map();
   const commands = new Map();
   const ownDir = fileURLToPath(new URL("../.pi/extensions/", import.meta.url));
@@ -36,6 +36,7 @@ await test("footer shows only tokens and available tools; toggles and disposes",
   ];
   let activeTools = ["read", "bash", "edit", "write", "codemode", "hidden"];
   register({
+    getThinkingLevel: () => "medium",
     on: (name, fn) => handlers.set(name, fn),
     registerCommand: (name, cmd) => commands.set(name, cmd),
     registerMarkdownTransformer() {},
@@ -68,32 +69,36 @@ await test("footer shows only tokens and available tools; toggles and disposes",
   });
   const footer = makeFooter();
   try {
-    assert.match(footer.render(120)[0], /Tokens totaal: 0.*Tools: 7.*Eigen tools: 2/);
+    assert.match(footer.render(120)[0], /◉ TOKENS 0.*⚒ TOOLS 7.*⚡ OWN 2/);
+    const wide = footer.render(200);
+    assert.equal(wide.length, 2, "wide terminals use exactly two HUD rows");
+    assert.match(wide[0], /◉ TOKENS.*⚒ TOOLS.*⚡ OWN.*IDLE.*⎇.*◈ THINKING/);
+    assert.match(wide[1], /◆.*◈ OOMAGENT-MOUAD/);
     assert.doesNotMatch(footer.render(120)[0], /Kosten|\$/);
-    assert.match(footer.render(120)[0], /Oomagent-Mouad/);
+    assert.match(footer.render(120).join("\n"), /◈ OOMAGENT-MOUAD/);
     entries = [
       { type: "message", message: { role: "user", content: "test" } },
       { type: "message", message: { role: "assistant", content: [{ type: "text", text: "antwoord" }], usage: { input: 1000, output: 8, cacheRead: 200, cacheWrite: 34 } } },
     ];
-    assert.match(footer.render(120)[0], /Tokens totaal: 1\.242.*Tools: 7.*Eigen tools: 2/);
+    assert.match(footer.render(120)[0], /◉ TOKENS 1\.242.*⚒ TOOLS 7.*⚡ OWN 2/);
     entries.push({ type: "message", message: { role: "user", content: "next" } });
-    assert.match(footer.render(120)[0], /Tokens totaal: 1\.242/);
+    assert.match(footer.render(120)[0], /◉ TOKENS 1\.242/);
     tools = [...tools, { name: "new-tool", exposure: "deferred", sourceInfo: ownSource }];
-    assert.match(footer.render(80)[0], /Tools: 8.*Eigen tools: 3/);
+    assert.match(footer.render(80)[0], /⚒ TOOLS 8.*⚡ OWN 3/);
     tools = [...tools, { name: "external-tool", exposure: "deferred", sourceInfo: { path: join(ownDir.replace(/\/$/, "") + "-other", "external.ts") } }];
-    assert.match(footer.render(80)[0], /Tools: 9.*Eigen tools: 3/);
+    assert.match(footer.render(80)[0], /⚒ TOOLS 9.*⚡ OWN 3/);
     activeTools = activeTools.filter(name => name !== "bash");
-    assert.match(footer.render(80)[0], /Tools: 8.*Eigen tools: 3/);
+    assert.match(footer.render(80)[0], /⚒ TOOLS 8.*⚡ OWN 3/);
     await new Promise(resolve => setTimeout(resolve, 1100));
     assert.ok(redraws > 0, "periodic refresh works without header animation");
     assert.doesNotMatch(footer.render(120)[0], /Kosten|\$/);
     tools = [];
-    assert.match(footer.render(80)[0], /Tools: 0.*Eigen tools: 0/);
+    assert.match(footer.render(80)[0], /⚒ TOOLS 0.*⚡ OWN 0/);
     ctx.ui.theme = { fg: (_color, text) => `\x1b[32m${text}\x1b[0m`, style: text => `\x1b[36m${text}\x1b[0m`, bg: (_color, text) => text };
     for (const width of [0, 1, 10, 40, 80, 120]) {
       const lines = footer.render(width);
-      assert.equal(lines.length, 1);
-      assert.equal(visibleWidth(lines[0]), width);
+      assert.ok(lines.length >= 2);
+      assert.ok(lines.every(line => visibleWidth(line) === width));
     }
     assert.ok(backgrounds.every(color => color === "userMessageBg"));
   } finally {
@@ -111,28 +116,19 @@ await test("footer shows only tokens and available tools; toggles and disposes",
   handlers.get("session_shutdown")();
 });
 
-await test("footer text follows the theme, bounces continuously and fits narrow widths", () => {
-  const colors = [];
-  const theme = { style: (text, options) => { colors.push(options.fg); return text; } };
-  const banner = "Oomagent-Mouad";
-  assert.equal(renderFooterTicker(28, 0, theme).indexOf(banner), 0);
-  assert.equal(renderFooterTicker(28, 1, theme).indexOf(banner), 1);
-  const lastPosition = 28 - banner.length;
-  assert.equal(renderFooterTicker(28, lastPosition, theme).indexOf(banner), lastPosition);
-  assert.equal(renderFooterTicker(28, lastPosition + 1, theme).indexOf(banner), lastPosition - 1);
-  assert.equal(renderFooterTicker(28, 2 * lastPosition, theme).indexOf(banner), 0);
-  assert.equal(renderFooterTicker(28, 2 * lastPosition + 1, theme).indexOf(banner), 1);
-  for (const width of [banner.length, banner.length + 1, 28, 80]) {
-    const distance = width - banner.length;
-    for (let frame = 0; frame <= 4 * distance + 2; frame++) {
-      const phase = distance ? frame % (2 * distance) : 0;
-      const expected = phase <= distance ? phase : 2 * distance - phase;
-      assert.equal(renderFooterTicker(width, frame, theme).indexOf(banner), expected);
+await test("footer identity bounces in both directions and stays within terminal width", () => {
+  const theme = { style: text => text };
+  const badge = "◈ OOMAGENT-MOUAD";
+  for (const width of [0, 1, 10, 16, 28, 80]) {
+    const distance = Math.max(0, width - visibleWidth(badge));
+    for (let frame = 0; frame < 4 * distance + 4; frame++) {
+      const line = renderFooterTicker(width, frame, theme);
+      assert.equal(visibleWidth(line), width);
+      if (width >= visibleWidth(badge)) {
+        const phase = distance ? frame % (2 * distance) : 0;
+        assert.equal(line.indexOf(badge), phase <= distance ? phase : 2 * distance - phase);
+      }
     }
-  }
-  assert.deepEqual([...new Set(colors)], ["text"]);
-  for (const width of [0, 1, 10, 13, 14, 28, 80]) {
-    for (const frame of [0, 1, 15, 100]) assert.equal(visibleWidth(renderFooterTicker(width, frame, theme)), width);
   }
 });
 
@@ -158,6 +154,7 @@ await test("reload resets displayed usage without erasing history; toggles and t
     },
   };
   register({
+    getThinkingLevel: () => "medium",
     on: (name, fn) => handlers.set(name, fn),
     registerCommand: (name, cmd) => commands.set(name, cmd), registerMarkdownTransformer() {},
     getActiveTools: () => [], getAllTools: () => [],
@@ -166,7 +163,7 @@ await test("reload resets displayed usage without erasing history; toggles and t
   const install = () => { footer = factory({ requestRender() {} }); };
   const expectUsage = tokens => {
     const line = footer.render(120)[0];
-    assert.ok(line.includes(`Tokens totaal: ${tokens}`), line);
+    assert.ok(line.includes(`◉ TOKENS ${tokens}`), line);
     assert.doesNotMatch(line, /Kosten|\$/);
   };
   try {
@@ -209,6 +206,92 @@ await test("reload resets displayed usage without erasing history; toggles and t
   } finally {
     footer?.dispose();
     handlers.get("session_shutdown")();
+  }
+});
+
+await test("footer tracks complete response duration, Git refresh, toggles and unavailable Git", async () => {
+  const root = await mkdtemp(join(tmpdir(), "oomagent-footer-live-"));
+  const handlers = new Map();
+  const commands = new Map();
+  let factory;
+  let now = 100;
+  const clock = mock.method(performance, "now", () => now);
+  register({
+    getThinkingLevel: () => "medium",
+    on: (name, fn) => handlers.set(name, fn),
+    registerCommand: (name, cmd) => commands.set(name, cmd),
+    registerMarkdownTransformer() {},
+    getAllTools: () => [], getActiveTools: () => [],
+  });
+  const ctx = {
+    mode: "tui", hasUI: true, cwd: root,
+    sessionManager: { getEntries: () => [] },
+    ui: {
+      theme: { fg: (_color, text) => text, bg: (_color, text) => text, style: text => text },
+      setFooter: value => { factory = value; }, setTheme: () => ({ success: true }),
+      setTitle() {}, setEditorComponent() {}, setHeader() {}, setWidget() {},
+    },
+  };
+  let footer;
+  const install = () => { footer = factory({ requestRender() {} }); };
+  const details = () => footer.render(140).join("\n");
+  const waitFor = async pattern => {
+    for (let i = 0; i < 100 && !pattern.test(details()); i++) {
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    assert.match(details(), pattern);
+  };
+  try {
+    await promisify(execFile)("git", ["init", "-b", "main"], {
+      cwd: root,
+      env: Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_"))),
+    });
+    handlers.get("session_start")({}, ctx);
+    install();
+    assert.match(details(), /◇ —.*⎇ laden/);
+    await waitFor(/⎇ main · 0 gewijzigd/);
+    handlers.get("before_agent_start")();
+    now = 1350;
+    assert.match(details(), /[◐◓◑◒] 1\.3s/);
+    handlers.get("agent_end")?.({});
+    handlers.get("before_agent_start")();
+    now = 2600;
+    assert.match(details(), /[◐◓◑◒] 2\.5s/);
+    await commands.get("oom-motion").handler("", {
+      ...ctx, ui: { ...ctx.ui, notify() {} },
+    });
+    await commands.get("oom-footer").handler("", ctx);
+    await commands.get("oom-footer").handler("", ctx);
+    install();
+    assert.match(details(), /[◐◓◑◒] 2\.5s/);
+    await writeFile(join(root, "new.txt"), "");
+    // Wait for the initial read before requesting the post-response refresh.
+    await waitFor(/⎇ main/);
+    handlers.get("agent_settled")();
+    await waitFor(/⎇ main · 1 gewijzigd/);
+    now = 10100;
+    assert.match(details(), /✓ 2\.5s/);
+    handlers.get("agent_settled")();
+    assert.match(details(), /✓ 2\.5s/);
+    handlers.get("before_agent_start")();
+    assert.match(details(), /[◐◓◑◒] 0\.0s/);
+    handlers.get("session_start")({}, ctx);
+    install();
+    assert.match(details(), /◇ —/);
+    for (const width of [0, 1, 20, 40, 80, 140]) {
+      assert.ok(footer.render(width).every(line => visibleWidth(line) === width));
+    }
+    ctx.cwd = join(root, "missing");
+    await commands.get("oom-footer").handler("", ctx);
+    await commands.get("oom-footer").handler("", ctx);
+    install();
+    await waitFor(/⎇ niet beschikbaar/);
+    footer.dispose();
+    footer.dispose();
+  } finally {
+    handlers.get("session_shutdown")();
+    clock.mock.restore();
+    await rm(root, { recursive: true, force: true });
   }
 });
 
@@ -287,6 +370,7 @@ await test("orbital header and message dividers fit narrow terminals and follow 
     },
   };
   register({
+    getThinkingLevel: () => "medium",
     on: (name, handler) => handlers.set(name, handler),
     registerCommand: (name, command) => commands.set(name, command),
     registerMarkdownTransformer: fn => { transform = fn; },
@@ -317,7 +401,7 @@ await test("orbital header and message dividers fit narrow terminals and follow 
     assert.match(output, /┗━+┛/);
     assert.ok(output.includes(markdown), "Markdown content stays intact");
     const editor = editorFactory({}, {}, {});
-    assert.equal(editor.brandBorder("───"), "\x1b[1m\x1b[31m━━━\x1b[0m\x1b[22m");
+    assert.equal(editor.brandBorder("───"), "\x1b[36m───\x1b[0m");
     const streaming = transform(markdown, { messageType: "assistant", availableWidth: 80, isStreaming: true });
     assert.match(streaming, /\x1b\[1m\x1b\[32m┏ pi-Oomagent /);
     assert.ok(!streaming.includes("┗"), "no closing divider while streaming");
@@ -423,6 +507,7 @@ await test("header loads a real project panel and toggles it without changing th
   let footer;
   let redraws = 0;
   register({
+    getThinkingLevel: () => "medium",
     on: (name, fn) => handlers.set(name, fn),
     registerCommand: (name, command) => commands.set(name, command),
     registerMarkdownTransformer() {},
@@ -495,10 +580,160 @@ await test("theme validates with Pi's loader", async () => {
   assert.ok(ticker.includes("\x1b["), "footer rendering uses terminal color/style escapes");
 });
 
+await test("footer shows live model and thinking level, including changes while motion is paused", async () => {
+  const handlers = new Map();
+  const commands = new Map();
+  let factory;
+  let model = { provider: "openai-codex", id: "gpt-6.1-sol" };
+  let thinking = "medium";
+  let redraws = 0;
+  register({
+    on: (name, fn) => handlers.set(name, fn),
+    registerCommand: (name, command) => commands.set(name, command),
+    registerMarkdownTransformer() {},
+    getAllTools: () => [], getActiveTools: () => [],
+    getThinkingLevel: () => thinking,
+  });
+  const ctx = {
+    mode: "tui", hasUI: true, cwd: "/project",
+    get model() { return model; },
+    sessionManager: { getEntries: () => [] },
+    ui: {
+      theme: { fg: (_color, text) => text, bg: (_color, text) => text, style: text => text },
+      setFooter: value => { factory = value; }, setTheme: () => ({ success: true }),
+      setTitle() {}, setEditorComponent() {}, setHeader() {}, setWidget() {}, notify() {},
+    },
+  };
+  handlers.get("session_start")({}, ctx);
+  const footer = factory({ requestRender() { redraws++; } });
+  try {
+    assert.match(footer.render(100).join(" "), /◈ THINKING medium.*◆ openai-codex\/gpt-6\.1-sol/);
+    await commands.get("oom-motion").handler("", ctx);
+    const beforeModelChange = redraws;
+    model = { provider: "anthropic", id: "another-model" };
+    handlers.get("model_select")({ model }, ctx);
+    assert.equal(redraws, beforeModelChange + 1, "model changes request an immediate redraw");
+    assert.match(footer.render(100).join(" "), /◆ anthropic\/another-model/);
+    assert.doesNotMatch(footer.render(100).join(" "), /gpt-6/);
+    for (const level of ["off", "minimal", "low", "medium", "high", "xhigh", "max"]) {
+      thinking = level;
+      const beforeLevelChange = redraws;
+      handlers.get("thinking_level_select")({ level }, ctx);
+      assert.equal(redraws, beforeLevelChange + 1);
+      assert.ok(footer.render(100).join(" ").includes("◈ THINKING " + level));
+    }
+    model = undefined;
+    assert.match(footer.render(100).join(" "), /◆ niet beschikbaar/);
+    model = { provider: "custom", id: "日本語".repeat(60) };
+    ctx.ui.theme = {
+      fg: (_color, text) => `\x1b[36m${text}\x1b[0m`,
+      bg: (_color, text) => text, style: text => text,
+    };
+    for (const width of [0, 1, 10, 40, 80, 120, 500]) {
+      const lines = footer.render(width);
+      assert.ok(lines.length >= 2);
+      assert.ok(lines.every(line => visibleWidth(line) === width));
+    }
+    // Real control characters in custom model metadata cannot inject terminal escapes.
+    model = { provider: "custom", id: "bad" + String.fromCharCode(27) + "[31m" + String.fromCharCode(10) };
+    assert.match(footer.render(100).join(" "), /bad\?\[31m\?/);
+    assert.doesNotMatch(footer.render(100).join(" "), /\x1b\[31m|\n/);
+  } finally {
+    footer.dispose();
+    handlers.get("session_shutdown")();
+  }
+  const stopped = redraws;
+  handlers.get("model_select")({}, ctx);
+  handlers.get("thinking_level_select")({}, ctx);
+  assert.equal(redraws, stopped, "disposed footer is not redrawn");
+});
+
 await test("non-terminal sessions do not install a footer", () => {
   const handlers = new Map();
   register({ on: (name, fn) => handlers.set(name, fn), registerCommand() {}, registerMarkdownTransformer() {} });
   for (const mode of ["rpc", "print", "json"]) {
     handlers.get("session_start")({}, { mode, hasUI: true, ui: { setFooter() { assert.fail("terminal-only"); } } });
+  }
+});
+
+await test("HUD wraps complete telemetry without losing long Unicode values", () => {
+  const theme = { fg: (_color, text) => `\x1b[36m${text}\x1b[0m` };
+  const groups = ["◉ TOKENS 25.976.204*", "⚒ TOOLS 82", "⚡ OWN 13", "◆ custom/日本語-model-e\u0301".repeat(3)];
+  const plain = s => s.replace(/\x1b\[[0-9;]*m/g, "").replace(/[\s│]/g, "");
+  for (const width of [4, 10, 20, 40, 80, 120, 200]) {
+    const lines = layoutFooterGroups(groups, width, theme);
+    assert.ok(lines.every(line => visibleWidth(line) <= width));
+    assert.equal(plain(lines.join("")), plain(groups.join("")), `retains values at ${width} columns`);
+  }
+});
+
+await test("HUD badge animates while idle; response spinner stops; timers clean up", async () => {
+  const handlers = new Map();
+  const commands = new Map();
+  const timers = new Set();
+  const interval = mock.method(globalThis, "setInterval", (callback, delay) => {
+    const timer = { callback, delay, unref() {} }; timers.add(timer); return timer;
+  });
+  const clear = mock.method(globalThis, "clearInterval", timer => timers.delete(timer));
+  let factory;
+  let now = 100;
+  const clock = mock.method(performance, "now", () => now);
+  const ctx = {
+    mode: "tui", hasUI: true, cwd: "/nonexistent-hud-test-project",
+    model: { provider: "openai-codex", id: "gpt-6-astra" },
+    sessionManager: { getEntries: () => [] },
+    ui: {
+      theme: { fg: (_color, text) => text, bg: (_color, text) => text, style: text => text },
+      setFooter: value => { factory = value; }, setTheme: () => ({ success: true }),
+      setTitle() {}, setEditorComponent() {}, setHeader() {}, setWidget() {}, notify() {},
+    },
+  };
+  register({
+    on: (name, fn) => handlers.set(name, fn), registerCommand: (name, cmd) => commands.set(name, cmd),
+    registerMarkdownTransformer() {}, getThinkingLevel: () => "medium", getAllTools: () => [], getActiveTools: () => [],
+  });
+  const animations = () => [...timers].filter(timer => timer.delay === 150);
+  let footer;
+  try {
+    handlers.get("session_start")({}, ctx);
+    footer = factory({ requestRender() {} });
+    assert.equal(animations().length, 1);
+    handlers.get("before_agent_start")();
+    assert.equal(animations().length, 1);
+    for (const frame of ["◐", "◓", "◑", "◒", "◐"]) {
+      assert.ok(footer.render(120).join(" ").includes(frame));
+      animations()[0].callback();
+    }
+    handlers.get("before_agent_start")();
+    assert.equal(animations().length, 1, "continuation never duplicates timers");
+    await commands.get("oom-motion").handler("", ctx);
+    assert.equal(animations().length, 0);
+    assert.match(footer.render(120).join(" "), /◐/);
+    await commands.get("oom-motion").handler("", ctx);
+    assert.equal(animations().length, 1);
+    now = 42900;
+    handlers.get("agent_settled")();
+    assert.equal(animations().length, 1);
+    assert.match(footer.render(120).join(" "), /✓ 42\.8s · READY/);
+    now = 90000;
+    assert.match(footer.render(120).join(" "), /✓ 42\.8s/);
+    for (const reason of ["error", "aborted"]) {
+      handlers.get("before_agent_start")();
+      handlers.get("message_end")({ message: { role: "assistant", stopReason: reason } });
+      handlers.get("agent_settled")();
+      assert.equal(animations().length, 1);
+      assert.match(footer.render(120).join(" "), reason === "error" ? /!.*ERROR/ : /◇.*ABORTED/);
+    }
+    handlers.get("before_agent_start")();
+    await commands.get("oom-footer").handler("", ctx);
+    assert.equal(animations().length, 0);
+    await commands.get("oom-footer").handler("", ctx);
+    footer = factory({ requestRender() {} });
+    assert.equal(animations().length, 1);
+    handlers.get("session_shutdown")();
+    assert.equal(timers.size, 0);
+  } finally {
+    footer?.dispose(); handlers.get("session_shutdown")();
+    interval.mock.restore(); clear.mock.restore(); clock.mock.restore();
   }
 });

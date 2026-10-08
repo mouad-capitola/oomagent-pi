@@ -49,12 +49,16 @@ Only the displayed counter resets: conversation history and Pi's actual session 
 
 Available tools and this package’s own tools remain visible. An `Oomagent-Mouad` neon ticker bounces continuously left to right and back in spare columns; narrow terminals prioritize the counters. Animation is local rendering and makes no model requests.
 
+The second footer line shows `Reactietijd` in seconds, counting thinking, tool calls and automatic continuations until `agent_settled`. It updates live and keeps the last duration until the next request; startup/reload resets it. `Git` shows the local branch, changed-file count and ahead/behind counts when an upstream exists. Git refreshes asynchronously every five seconds and after a response, without fetching; unavailable Git is explicit. Narrow terminals truncate each line safely.
+
+The third footer line shows the current `Thinking` level and selected `provider/model`. Both are read from Pi at render time and refresh when the model or thinking level changes, including while animation is paused. No extra model requests are made.
+
 The larger orbital node network remains optional; both the scene and link animation are off by default.
 
 - `/oom-screen`: show/hide the large welcome scene (also useful after `/reload`).
 - `/oom-tree`: show/hide the project folder panel (on by default). At 110 columns or wider it sits beside the header; narrower terminals stack a short preview below it. Folder/file icons are `📁`/`📄`. It asynchronously refreshes filenames every five seconds, shows a bounded two-level preview, skips symlinks, `.env` files, `.git`, `.serena` and `node_modules`, and sanitizes terminal control characters. It does not read file contents or contact Serena/MCP. Loading, empty and unreadable states are explicit; filesystem errors do not interrupt the interface. This is a header panel, not a full-height file explorer.
 - `/oom-motion`: pause/resume the neon footer ticker and optional node-link animation. The ticker starts enabled; tool counts still refresh while paused.
-- `/oom-footer`: toggle the single-line footer (`Tokens totaal: … | Tools: … | Eigen tools: …`) or restore Pi’s default footer. Tools counts active tools plus callable codemode/deferred tools, excluding hidden and inactive direct/model-only tools. Eigen tools is the available subset whose source file is in this package’s `.pi/extensions/` directory. Counts use runtime metadata and refresh every second, even when animation is paused. The neon ticker advances every 150 ms when enabled.
+- `/oom-footer`: toggle the three-line footer (`Tokens totaal: … | Tools: … | Eigen tools: …`) or restore Pi’s default footer. Tools counts active tools plus callable codemode/deferred tools, excluding hidden and inactive direct/model-only tools. Eigen tools is the available subset whose source file is in this package’s `.pi/extensions/` directory. Counts use runtime metadata and refresh every second, even when animation is paused. The neon ticker advances every 150 ms when enabled.
 - The editor uses turquoise borders; user dividers are amber and assistant dividers turquoise. Markdown remains intact; dotted node borders are top/bottom dividers, not full native message boxes.
 - For a matching full viewport, set your terminal profile's background to `#101214`. The theme colors panels but does not change global terminal preferences.
 - UI customization runs only in interactive terminal mode, not RPC/print mode. Timers are cleaned up on disposal and session shutdown.

@@ -5,21 +5,41 @@ import { readdir, realpath } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { CustomEditor, type ExtensionAPI, type ExtensionContext, type Theme } from "@earendil-works/pi-coding-agent";
 import { sessionTokenUsage } from "../lib/footer-metrics.ts";
-import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 
 const execFileAsync = promisify(execFile);
 const OWN_EXTENSION_DIR = dirname(fileURLToPath(import.meta.url));
 const BRAND = "OomAgent";
-const FOOTER_BANNER = "Oomagent-Mouad";
+const FOOTER_BANNER = "◈ OOMAGENT-MOUAD";
+const SPINNER = ["◐", "◓", "◑", "◒"];
 
 export function renderFooterTicker(width: number, frame: number, theme: Theme): string {
   const columns = Math.max(0, width);
-  const distance = Math.max(0, columns - FOOTER_BANNER.length);
-  const phase = distance > 0 ? frame % (2 * distance) : 0;
+  const badge = truncateToWidth(theme.style(FOOTER_BANNER, { fg: "accent", bold: true }), columns, "");
+  const distance = Math.max(0, columns - visibleWidth(badge));
+  const phase = distance ? frame % (2 * distance) : 0;
   const position = phase <= distance ? phase : 2 * distance - phase;
-  const banner = theme.style(FOOTER_BANNER, { fg: "text", bold: true });
-  const clipped = truncateToWidth(" ".repeat(position) + banner, columns, "");
-  return clipped + " ".repeat(Math.max(0, columns - visibleWidth(clipped)));
+  return " ".repeat(position) + badge + " ".repeat(distance - position);
+}
+
+// Wrap whole telemetry groups first, then long values using Pi's ANSI-aware layout.
+export function layoutFooterGroups(groups: string[], width: number, theme: Theme): string[] {
+  if (width <= 0) return [""];
+  const separator = theme.fg("dim", "  │  ");
+  const lines: string[] = [];
+  let line = "";
+  for (const group of groups) {
+    if (line && visibleWidth(line + separator + group) <= width) {
+      line += separator + group;
+    } else {
+      if (line) lines.push(line);
+      const wrapped = wrapTextWithAnsi(group, width);
+      lines.push(...wrapped.slice(0, -1));
+      line = wrapped.at(-1) ?? "";
+    }
+  }
+  if (line) lines.push(line);
+  return lines;
 }
 type Ink = "text" | "muted" | "accent" | "success" | "error";
 
@@ -179,6 +199,12 @@ export default function (pi: ExtensionAPI) {
   let footerEnabled = true;
   let footerMotion = true;
   let disposeFooter: (() => void) | undefined;
+  let redrawFooter: (() => void) | undefined;
+  let refreshFooterGit: (() => Promise<void>) | undefined;
+  let responseStarted: number | undefined;
+  let responseDuration: number | undefined;
+  let responseProblem: "error" | "aborted" | undefined;
+  let syncFooterAnimation: (() => void) | undefined;
   // Existing entries are excluded, not deleted. Capture once per start/reload,
   // not when toggling or recreating the footer component.
   let usageBaseline = new Set<unknown>();
@@ -187,11 +213,38 @@ export default function (pi: ExtensionAPI) {
     ctx.ui.setFooter(footerEnabled ? (tui) => {
       let disposed = false;
       let tickerFrame = 0;
-      // Animation is local terminal rendering, never a model/tool request.
-      const animation = setInterval(() => {
-        if (footerMotion) { tickerFrame++; tui.requestRender(); }
-      }, 150);
-      animation.unref();
+      let gitStatus: FooterGitStatus | undefined;
+      let gitLoading = true;
+      let readingGit = false;
+      redrawFooter = () => tui.requestRender();
+      const refreshGit = async () => {
+        if (disposed || readingGit) return;
+        readingGit = true;
+        try {
+          const next = await readFooterGitStatus(ctx.cwd);
+          if (!disposed) gitStatus = next;
+        } catch {
+          if (!disposed) gitStatus = undefined;
+        } finally {
+          readingGit = false;
+          gitLoading = false;
+          if (!disposed) tui.requestRender();
+        }
+      };
+      refreshFooterGit = refreshGit;
+      const gitTimer = setInterval(() => { void refreshGit(); }, 5000);
+      gitTimer.unref();
+      void refreshGit();
+      let animation: ReturnType<typeof setInterval> | undefined;
+      const syncAnimation = () => {
+        if (animation) { clearInterval(animation); animation = undefined; }
+        if (!disposed && footerMotion) {
+          animation = setInterval(() => { tickerFrame++; tui.requestRender(); }, 150);
+          animation.unref();
+        }
+      };
+      syncFooterAnimation = syncAnimation;
+      syncAnimation();
       // Keep tool availability fresh even while animation is paused.
       const timer = setInterval(() => tui.requestRender(), 1000);
       timer.unref();
@@ -199,7 +252,11 @@ export default function (pi: ExtensionAPI) {
         if (disposed) return;
         disposed = true;
         clearInterval(timer);
-        clearInterval(animation);
+        if (animation) clearInterval(animation);
+        syncFooterAnimation = undefined;
+        clearInterval(gitTimer);
+        redrawFooter = undefined;
+        refreshFooterGit = undefined;
       };
       disposeFooter = dispose;
       return {
@@ -221,17 +278,50 @@ export default function (pi: ExtensionAPI) {
             !usageBaseline.has(entry.id ?? entry)
           );
           const tokens = sessionTokenUsage(entries);
-          const line = [
-            theme.fg("muted", "Tokens totaal: ") + theme.fg("text", tokens.total.toLocaleString("nl-NL") + (tokens.incomplete ? "*" : "")),
-            theme.fg("muted", "Tools: ") + theme.fg("accent", String(availableTools.length)),
-            theme.fg("muted", "Eigen tools: ") + theme.fg("accent", String(ownToolCount)),
-          ].join(theme.fg("dim", "  |  "));
-          const tickerWidth = Math.min(28, width - visibleWidth(line) - 3);
-          const ticker = tickerWidth >= FOOTER_BANNER.length
-            ? "   " + renderFooterTicker(tickerWidth, tickerFrame, theme)
-            : "";
-          const fitted = fit(line + ticker, width);
-          return [theme.bg("userMessageBg", fitted + " ".repeat(Math.max(0, width - visibleWidth(fitted))))];
+          const clean = (value: string) => value.replace(/[\x00-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]/g, "?");
+          const metric = (label: string, value: string) => theme.fg("muted", label + " ") + theme.fg("text", value);
+          const system = [
+            metric("◉ TOKENS", tokens.total.toLocaleString("nl-NL") + (tokens.incomplete ? "*" : "")),
+            metric("⚒ TOOLS", String(availableTools.length)),
+            metric("⚡ OWN", String(ownToolCount)),
+          ];
+          const running = responseStarted !== undefined;
+          const elapsed = running ? performance.now() - responseStarted! : responseDuration;
+          const duration = elapsed === undefined ? "—" : `${(elapsed / 1000).toFixed(1)}s`;
+          const indicator = running ? SPINNER[footerMotion ? tickerFrame % SPINNER.length : 0]
+            : responseProblem === "error" ? "!" : responseProblem === "aborted" ? "◇" : elapsed === undefined ? "◇" : "✓";
+          const state = running ? "ACTIVE" : responseProblem === "error" ? "ERROR" : responseProblem === "aborted" ? "ABORTED" : elapsed === undefined ? "IDLE" : "READY";
+          const statusColor = running || (elapsed !== undefined && !responseProblem) ? "success" : responseProblem ? "warning" : "muted";
+          const runtime = theme.style(`${indicator} ${duration}`, {
+            fg: theme.name === "oomagent-swiss" && statusColor === "success" ? theme.colors.borderAccent : statusColor,
+            bold: running,
+          }) + theme.fg("dim", ` · ${state}`);
+          const git = gitStatus
+            ? theme.fg("accent", `⎇ ${clean(gitStatus.branch)}`) +
+              theme.fg(gitStatus.conflicts ? "warning" : "muted", ` · ${gitStatus.changed} gewijzigd`) +
+              (gitStatus.ahead === null ? "" : " · " +
+                theme.style(`↑${gitStatus.ahead}`, { fg: "accent", bold: true }) + " " +
+                theme.style(`↓${gitStatus.behind}`, { fg: "muted", italic: true }))
+            : theme.fg("muted", gitLoading ? "⎇ laden…" : "⎇ niet beschikbaar");
+          const model = ctx.model;
+          const modelName = model ? clean(`${model.provider}/${model.id}`) : "niet beschikbaar";
+          const telemetry = layoutFooterGroups([...system, runtime, git,
+            metric("◈ THINKING", clean(pi.getThinkingLevel())),
+          ], width, theme);
+          const ai = layoutFooterGroups([
+            theme.style(`◆ ${modelName}`, { fg: "accent", bold: true }),
+          ], width, theme);
+          const last = ai.length - 1;
+          const remaining = width - visibleWidth(ai[last]) - 3;
+          if (remaining >= visibleWidth(FOOTER_BANNER)) {
+            ai[last] += "   " + renderFooterTicker(remaining, tickerFrame, theme);
+          } else {
+            ai.push(renderFooterTicker(width, tickerFrame, theme));
+          }
+          return [...telemetry, ...ai].map(text => {
+            const clipped = fit(text, width);
+            return theme.bg("userMessageBg", clipped + " ".repeat(Math.max(0, width - visibleWidth(clipped))));
+          });
         },
       };
     } : undefined);
@@ -261,6 +351,9 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_start", (_event, ctx) => {
     if (ctx.mode !== "tui" || !ctx.hasUI) return;
     active = true;
+    responseStarted = undefined;
+    responseDuration = undefined;
+    responseProblem = undefined;
     usageBaseline = new Set((ctx.sessionManager?.getEntries?.() ?? []).map(entry => entry.id ?? entry));
     installFooter(ctx);
     currentTheme = () => ctx.ui.theme;
@@ -270,7 +363,7 @@ export default function (pi: ExtensionAPI) {
     ctx.ui.setTitle(BRAND);
     ctx.ui.setEditorComponent((tui, theme, keys) => {
       const editor = new BrandEditor(tui, theme, keys);
-      editor.brandBorder = text => ctx.ui.theme.bold(ctx.ui.theme.fg("borderMuted", text.replaceAll("─", "━")));
+      editor.brandBorder = text => ctx.ui.theme.fg("dim", text);
       return editor;
     });
     ctx.ui.setHeader(tui => {
@@ -352,8 +445,31 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("before_agent_start", () => {
+    if (responseStarted === undefined) {
+      responseStarted = performance.now();
+      responseProblem = undefined;
+    }
+    syncFooterAnimation?.();
+    redrawFooter?.();
     splash = false;
     redraw?.();
+  });
+  pi.on("model_select", () => redrawFooter?.());
+  pi.on("thinking_level_select", () => redrawFooter?.());
+  pi.on("message_end", (event) => {
+    if (event.message.role === "assistant") {
+      const reason = event.message.stopReason;
+      responseProblem = reason === "error" || reason === "aborted" ? reason : undefined;
+    }
+  });
+  pi.on("agent_settled", () => {
+    if (responseStarted !== undefined) {
+      responseDuration = performance.now() - responseStarted;
+      responseStarted = undefined;
+    }
+    redrawFooter?.();
+    syncFooterAnimation?.();
+    void refreshFooterGit?.();
   });
   pi.on("session_shutdown", () => {
     disposeFooter?.();
@@ -389,11 +505,13 @@ export default function (pi: ExtensionAPI) {
     },
   });
   pi.registerCommand("oom-motion", {
-    description: "Pause or resume the orbital link animation",
+    description: "Pause or resume HUD and orbital animations",
     handler: async (_args, ctx) => {
       if (ctx.mode !== "tui" || !ctx.hasUI) return;
       footerMotion = !footerMotion;
       motion = footerMotion;
+      syncFooterAnimation?.();
+      redrawFooter?.();
       redraw?.();
       ctx.ui.notify(`OomAgent animation ${footerMotion ? "on" : "off"}.`, "info");
     },
