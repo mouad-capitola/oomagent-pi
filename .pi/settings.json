@@ -5,5 +5,11 @@
     "inlineBudget": 0
   },
   "theme": "oomagent-swiss",
-  "tuiMode": "fullscreen"
+  "tuiMode": "fullscreen",
+  "packages": [
+    {
+      "source": "npm:pi-chatgpt-limit",
+      "extensions": []
+    }
+  ]
 }

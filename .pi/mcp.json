@@ -26,6 +26,25 @@
       ],
       "exposure": "codemode",
       "description": "Lokale MCP bridge naar mijn OomAgent Pi coding agent"
+    },
+    "crypto": {
+      "command": "docker",
+      "args": [
+        "run",
+        "--rm",
+        "-i",
+        "--read-only",
+        "--cap-drop=ALL",
+        "--security-opt=no-new-privileges",
+        "--tmpfs",
+        "/tmp",
+        "--env-file",
+        "/Users/buurtkamer/Projects/oomagent/oomagent-mcp-crypto/.env",
+        "oomagent-mcp-crypto:local"
+      ],
+      "exposure": "codemode",
+      "timeout": 30,
+      "description": "Eigen Crypto MCP: publieke USD-prijzen, 24h-verandering, vergelijking en samenvatting via CoinGecko; geen financieel advies."
     }
   }
 }

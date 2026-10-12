@@ -4,8 +4,10 @@ import { basename, dirname, join, resolve } from "node:path";
 import { readdir, realpath } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { CustomEditor, type ExtensionAPI, type ExtensionContext, type Theme } from "@earendil-works/pi-coding-agent";
+import { createQuotaMonitor, formatContext, formatQuota, isCodex } from "../lib/footer-limits.ts";
+import { frameCodemode } from "../lib/codemode-frame.ts";
 import { sessionTokenUsage } from "../lib/footer-metrics.ts";
-import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { rgbColor, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 
 const execFileAsync = promisify(execFile);
 const OWN_EXTENSION_DIR = dirname(fileURLToPath(import.meta.url));
@@ -13,9 +15,29 @@ const BRAND = "OomAgent";
 const FOOTER_BANNER = "◈ OOMAGENT-MOUAD";
 const SPINNER = ["◐", "◓", "◑", "◒"];
 
+// Footer-only accents: do not recolor messages, tools or the user's theme.
+const FOOTER_PALETTES = {
+  dark: { purple: rgbColor(179, 136, 255), cyan: rgbColor(73, 211, 222),
+    green: rgbColor(100, 220, 145), blue: rgbColor(112, 180, 255),
+    amber: rgbColor(245, 191, 92), red: rgbColor(255, 117, 127), muted: rgbColor(155, 166, 183) },
+  light: { purple: rgbColor(109, 40, 217), cyan: rgbColor(0, 105, 120),
+    green: rgbColor(22, 115, 65), blue: rgbColor(30, 90, 180),
+    amber: rgbColor(145, 87, 0), red: rgbColor(185, 35, 55), muted: rgbColor(85, 96, 115) },
+};
+
+export function footerPalette(theme: Pick<Theme, "appearance">) {
+  return FOOTER_PALETTES[theme.appearance === "light" ? "light" : "dark"];
+}
+
+export function footerUsageColor(value: number | undefined, theme: Pick<Theme, "appearance">) {
+  const colors = footerPalette(theme);
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return colors.muted;
+  return value >= 90 ? colors.red : value >= 75 ? colors.amber : colors.cyan;
+}
+
 export function renderFooterTicker(width: number, frame: number, theme: Theme): string {
   const columns = Math.max(0, width);
-  const badge = truncateToWidth(theme.style(FOOTER_BANNER, { fg: "accent", bold: true }), columns, "");
+  const badge = truncateToWidth(theme.style(FOOTER_BANNER, { fg: footerPalette(theme).purple, bold: true }), columns, "");
   const distance = Math.max(0, columns - visibleWidth(badge));
   const phase = distance ? frame % (2 * distance) : 0;
   const position = phase <= distance ? phase : 2 * distance - phase;
@@ -25,7 +47,7 @@ export function renderFooterTicker(width: number, frame: number, theme: Theme): 
 // Wrap whole telemetry groups first, then long values using Pi's ANSI-aware layout.
 export function layoutFooterGroups(groups: string[], width: number, theme: Theme): string[] {
   if (width <= 0) return [""];
-  const separator = theme.fg("dim", "  │  ");
+  const separator = theme.style("  │  ", { fg: footerPalette(theme).muted });
   const lines: string[] = [];
   let line = "";
   for (const group of groups) {
@@ -200,6 +222,7 @@ export default function (pi: ExtensionAPI) {
   let footerMotion = true;
   let disposeFooter: (() => void) | undefined;
   let redrawFooter: (() => void) | undefined;
+  const quota = createQuotaMonitor(() => redrawFooter?.());
   let refreshFooterGit: (() => Promise<void>) | undefined;
   let responseStarted: number | undefined;
   let responseDuration: number | undefined;
@@ -279,11 +302,13 @@ export default function (pi: ExtensionAPI) {
           );
           const tokens = sessionTokenUsage(entries);
           const clean = (value: string) => value.replace(/[\x00-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]/g, "?");
-          const metric = (label: string, value: string) => theme.fg("muted", label + " ") + theme.fg("text", value);
+          const colors = footerPalette(theme);
+          const metric = (label: string, value: string, color = colors.cyan) =>
+            theme.style(label + " ", { fg: color, bold: true }) + theme.fg("text", value);
           const system = [
             metric("◉ TOKENS", tokens.total.toLocaleString("nl-NL") + (tokens.incomplete ? "*" : "")),
-            metric("⚒ TOOLS", String(availableTools.length)),
-            metric("⚡ OWN", String(ownToolCount)),
+            metric("🔧 TOOLS", String(availableTools.length), colors.blue),
+            metric("⚡ OWN", String(ownToolCount), colors.amber),
           ];
           const running = responseStarted !== undefined;
           const elapsed = running ? performance.now() - responseStarted! : responseDuration;
@@ -291,25 +316,28 @@ export default function (pi: ExtensionAPI) {
           const indicator = running ? SPINNER[footerMotion ? tickerFrame % SPINNER.length : 0]
             : responseProblem === "error" ? "!" : responseProblem === "aborted" ? "◇" : elapsed === undefined ? "◇" : "✓";
           const state = running ? "ACTIVE" : responseProblem === "error" ? "ERROR" : responseProblem === "aborted" ? "ABORTED" : elapsed === undefined ? "IDLE" : "READY";
-          const statusColor = running || (elapsed !== undefined && !responseProblem) ? "success" : responseProblem ? "warning" : "muted";
-          const runtime = theme.style(`${indicator} ${duration}`, {
-            fg: theme.name === "oomagent-swiss" && statusColor === "success" ? theme.colors.borderAccent : statusColor,
-            bold: running,
-          }) + theme.fg("dim", ` · ${state}`);
+          const statusColor = running ? colors.cyan : responseProblem === "error" ? colors.red
+            : responseProblem === "aborted" ? colors.amber : elapsed === undefined ? colors.muted : colors.green;
+          const runtime = theme.style(`${indicator} ${duration}`, { fg: statusColor, bold: true })
+            + theme.style(` · ${state}`, { fg: statusColor });
           const git = gitStatus
-            ? theme.fg("accent", `⎇ ${clean(gitStatus.branch)}`) +
-              theme.fg(gitStatus.conflicts ? "warning" : "muted", ` · ${gitStatus.changed} gewijzigd`) +
+            ? theme.style(`⎇ ${clean(gitStatus.branch)}`, { fg: colors.green, bold: true }) +
+              theme.style(` · ${gitStatus.changed} gewijzigd`, {
+                fg: gitStatus.conflicts ? colors.red : gitStatus.changed ? colors.amber : colors.muted,
+              }) +
               (gitStatus.ahead === null ? "" : " · " +
-                theme.style(`↑${gitStatus.ahead}`, { fg: "accent", bold: true }) + " " +
-                theme.style(`↓${gitStatus.behind}`, { fg: "muted", italic: true }))
-            : theme.fg("muted", gitLoading ? "⎇ laden…" : "⎇ niet beschikbaar");
+                theme.style(`↑${gitStatus.ahead}`, { fg: colors.green, bold: true }) + " " +
+                theme.style(`↓${gitStatus.behind}`, { fg: colors.blue, bold: true }))
+            : theme.style(gitLoading ? "⎇ laden…" : "⎇ niet beschikbaar", { fg: colors.muted });
           const model = ctx.model;
           const modelName = model ? clean(`${model.provider}/${model.id}`) : "niet beschikbaar";
           const telemetry = layoutFooterGroups([...system, runtime, git,
-            metric("◈ THINKING", clean(pi.getThinkingLevel())),
+            metric("◈ THINKING", clean(pi.getThinkingLevel()), colors.purple),
           ], width, theme);
           const ai = layoutFooterGroups([
-            theme.style(`◆ ${modelName}`, { fg: "accent", bold: true }),
+            theme.style(`◆ ${modelName}`, { fg: colors.purple, bold: true }),
+            ...(isCodex(model?.provider) ? [theme.style(formatQuota(quota.snapshot()), { fg: footerUsageColor(quota.snapshot()?.weekly, theme), bold: true })] : []),
+            theme.style(formatContext(ctx), { fg: footerUsageColor(ctx.getContextUsage?.()?.percent, theme), bold: true }),
           ], width, theme);
           const last = ai.length - 1;
           const remaining = width - visibleWidth(ai[last]) - 3;
@@ -336,9 +364,16 @@ export default function (pi: ExtensionAPI) {
   let redraw: (() => void) | undefined;
   let currentTheme: (() => Theme) | undefined;
 
+  // Pi 1.0.4 renderer composition: presentation only, never override execution.
+  pi.registerToolRenderer?.((toolName, next) => {
+    const base = next();
+    return toolName === "codemode" && base?.renderCall && base?.renderResult
+      ? frameCodemode(base) : base;
+  });
+
   pi.registerMarkdownTransformer((markdown, context) => {
     if (!active || !currentTheme || context.messageType === "assistant-thinking" || !markdown.trim()) return markdown;
-    const width = Math.max(0, Math.min(context.availableWidth, 110));
+    const width = Math.max(0, context.availableWidth);
     const user = context.messageType === "user";
     const theme = currentTheme();
     const color = user ? "borderMuted" : "borderAccent";
@@ -356,6 +391,7 @@ export default function (pi: ExtensionAPI) {
     responseProblem = undefined;
     usageBaseline = new Set((ctx.sessionManager?.getEntries?.() ?? []).map(entry => entry.id ?? entry));
     installFooter(ctx);
+    quota.start(ctx);
     currentTheme = () => ctx.ui.theme;
     splash = false;
     const selected = ctx.ui.setTheme("oomagent-swiss");
@@ -454,7 +490,10 @@ export default function (pi: ExtensionAPI) {
     splash = false;
     redraw?.();
   });
-  pi.on("model_select", () => redrawFooter?.());
+  pi.on("model_select", (_event, ctx) => {
+    if (active) quota.start(ctx);
+    redrawFooter?.();
+  });
   pi.on("thinking_level_select", () => redrawFooter?.());
   pi.on("message_end", (event) => {
     if (event.message.role === "assistant") {
@@ -470,8 +509,10 @@ export default function (pi: ExtensionAPI) {
     redrawFooter?.();
     syncFooterAnimation?.();
     void refreshFooterGit?.();
+    void quota.refresh();
   });
   pi.on("session_shutdown", () => {
+    quota.stop();
     disposeFooter?.();
     disposeFooter = undefined;
     disposeHeader?.();
@@ -479,6 +520,16 @@ export default function (pi: ExtensionAPI) {
     redraw = undefined;
     currentTheme = undefined;
     active = false;
+  });
+  pi.registerCommand("chatgpt-limit", {
+    description: "Show ChatGPT usage and context capacity without replacing the OomAgent HUD",
+    handler: async (_args, ctx) => {
+      if (ctx.mode !== "tui" || !ctx.hasUI) return;
+      await quota.refresh();
+      ctx.ui.notify(isCodex(ctx.model?.provider)
+        ? `${formatQuota(quota.snapshot())} · ${formatContext(ctx)} (gebruikt; ? = niet beschikbaar)`
+        : "ChatGPT-limieten zijn alleen beschikbaar voor Codex-modellen.", "info");
+    },
   });
   pi.registerCommand("oom-footer", {
     description: "Toggle the OomAgent footer and the default Pi footer",

@@ -53,12 +53,32 @@ The second footer line shows `Reactietijd` in seconds, counting thinking, tool c
 
 The third footer line shows the current `Thinking` level and selected `provider/model`. Both are read from Pi at render time and refresh when the model or thinking level changes, including while animation is paused. No extra model requests are made.
 
+Next to the model, the HUD shows `ChatGPT week 17%` (subscription quota **used**)
+and `CTX 23.0% / 272k` (current context usage and model capacity). These are different
+limits. Capacity comes from Pi, not a fixed 272k value. Unknown quota/context is `?%`,
+never an invented zero. The existing cumulative TOKENS counter is unchanged.
+
+Quota refreshes for Codex models in TUI mode on startup/model change and at most once
+per minute during a session. It uses Pi's credential resolver and only the fixed
+`https://chatgpt.com/backend-api/wham/usage` endpoint, without redirects or retries.
+No credentials or provider error bodies are logged or persisted. This is a usage
+lookup, not a model request. Non-Codex models show context only; requests/timers are
+cancelled on switch/shutdown and old snapshots expire. `/chatgpt-limit` shows the
+same values without installing another footer.
+
+Project `.pi/settings.json` filters out the installed `pi-chatgpt-limit` package's
+standalone extension (`extensions: []`), preventing two competing footers/commands.
+The npm package remains installed and unchanged outside this project's override.
+The integrated implementation is `.pi/lib/footer-limits.ts`. Use `/reload` to apply.
+
 The larger orbital node network remains optional; both the scene and link animation are off by default.
 
 - `/oom-screen`: show/hide the large welcome scene (also useful after `/reload`).
 - `/oom-tree`: show/hide the project folder panel (on by default). At 110 columns or wider it sits beside the header; narrower terminals stack a short preview below it. Folder/file icons are `📁`/`📄`. It asynchronously refreshes filenames every five seconds, shows a bounded two-level preview, skips symlinks, `.env` files, `.git`, `.serena` and `node_modules`, and sanitizes terminal control characters. It does not read file contents or contact Serena/MCP. Loading, empty and unreadable states are explicit; filesystem errors do not interrupt the interface. This is a header panel, not a full-height file explorer.
 - `/oom-motion`: pause/resume the neon footer ticker and optional node-link animation. The ticker starts enabled; tool counts still refresh while paused.
 - `/oom-footer`: toggle the three-line footer (`Tokens totaal: … | Tools: … | Eigen tools: …`) or restore Pi’s default footer. Tools counts active tools plus callable codemode/deferred tools, excluding hidden and inactive direct/model-only tools. Eigen tools is the available subset whose source file is in this package’s `.pi/extensions/` directory. Counts use runtime metadata and refresh every second, even when animation is paused. The neon ticker advances every 150 ms when enabled.
+- User/assistant message dividers span the same available width as Markdown, including terminals wider than 110 columns; content is not truncated or rewritten to fit a shorter divider.
+- Codemode's code and textual results share a closed purple square-corner frame (`┏━┓`, `┃`, `┗━┛`). Pi's original renderers still handle highlighting, nested-call status, errors, streaming and expansion. Inline images remain rendered by Pi separately. This uses Pi 1.0.4's renderer-composition API and never changes tool execution. Tests can target that runtime with `PI_TEST_RUNTIME_DIST=/path/to/pi-coding-agent/dist node --test tests/terminal-frames.test.ts`.
 - The editor uses turquoise borders; user dividers are amber and assistant dividers turquoise. Markdown remains intact; dotted node borders are top/bottom dividers, not full native message boxes.
 - For a matching full viewport, set your terminal profile's background to `#101214`. The theme colors panels but does not change global terminal preferences.
 - UI customization runs only in interactive terminal mode, not RPC/print mode. Timers are cleaned up on disposal and session shutdown.
@@ -95,3 +115,11 @@ To undo this repository's hook activation (no previous custom hooks path was con
 ```bash
 git config --local --unset core.hooksPath
 ```
+
+## Offline split-pane UI prototype
+
+An opt-in layout preview is available in [`prototypes/oomagent-layout/`](prototypes/oomagent-layout/README.md).
+Start `node prototypes/oomagent-layout/preview.mjs` from this repository in a separate terminal.
+It puts WhatsApp-style chat and input on the left, simulated CodeMode output on the right,
+and reuses the existing footer across the full width. It does **not** connect to an agent,
+execute tools, load credentials or change the running Pi interface. Ctrl+C closes it.

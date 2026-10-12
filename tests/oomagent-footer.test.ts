@@ -15,11 +15,13 @@ const { visibleWidth } = await import(tuiUrl);
 
 const source = (await readFile(new URL("../.pi/extensions/oomagent-ui.ts", import.meta.url), "utf8"))
   .replace(/^import .*pi-coding-agent.*;$/m, 'class CustomEditor {}')
+  .replace('"../lib/codemode-frame.ts"', JSON.stringify(new URL("../.pi/lib/codemode-frame.ts", import.meta.url).href))
+  .replace('"../lib/footer-limits.ts"', JSON.stringify(new URL("../.pi/lib/footer-limits.ts", import.meta.url).href))
   .replace('"../lib/footer-metrics.ts"', JSON.stringify(new URL("../.pi/lib/footer-metrics.ts", import.meta.url).href))
   .replace('"@earendil-works/pi-tui"', JSON.stringify(tuiUrl))
   .replaceAll("import.meta.url", JSON.stringify(new URL("../.pi/extensions/oomagent-ui.ts", import.meta.url).href));
 const load = text => import(`data:text/javascript;base64,${Buffer.from(stripTypeScriptTypes(text)).toString("base64")}`);
-const { parseFooterGitStatus, readFooterGitStatus, messageBorder, sceneLines, readProjectTree, renderProjectPanel, renderFooterTicker, layoutFooterGroups } = await load(source);
+const { parseFooterGitStatus, readFooterGitStatus, messageBorder, sceneLines, readProjectTree, renderProjectPanel, renderFooterTicker, layoutFooterGroups, footerPalette, footerUsageColor } = await load(source);
 const { default: register } = await load(source);
 
 await test("footer preserves tokens and available tools; toggles and disposes", async () => {
@@ -69,10 +71,10 @@ await test("footer preserves tokens and available tools; toggles and disposes", 
   });
   const footer = makeFooter();
   try {
-    assert.match(footer.render(120)[0], /◉ TOKENS 0.*⚒ TOOLS 7.*⚡ OWN 2/);
+    assert.match(footer.render(120)[0], /◉ TOKENS 0.*🔧 TOOLS 7.*⚡ OWN 2/);
     const wide = footer.render(200);
     assert.equal(wide.length, 2, "wide terminals use exactly two HUD rows");
-    assert.match(wide[0], /◉ TOKENS.*⚒ TOOLS.*⚡ OWN.*IDLE.*⎇.*◈ THINKING/);
+    assert.match(wide[0], /◉ TOKENS.*🔧 TOOLS.*⚡ OWN.*IDLE.*⎇.*◈ THINKING/);
     assert.match(wide[1], /◆.*◈ OOMAGENT-MOUAD/);
     assert.doesNotMatch(footer.render(120)[0], /Kosten|\$/);
     assert.match(footer.render(120).join("\n"), /◈ OOMAGENT-MOUAD/);
@@ -80,20 +82,20 @@ await test("footer preserves tokens and available tools; toggles and disposes", 
       { type: "message", message: { role: "user", content: "test" } },
       { type: "message", message: { role: "assistant", content: [{ type: "text", text: "antwoord" }], usage: { input: 1000, output: 8, cacheRead: 200, cacheWrite: 34 } } },
     ];
-    assert.match(footer.render(120)[0], /◉ TOKENS 1\.242.*⚒ TOOLS 7.*⚡ OWN 2/);
+    assert.match(footer.render(120)[0], /◉ TOKENS 1\.242.*🔧 TOOLS 7.*⚡ OWN 2/);
     entries.push({ type: "message", message: { role: "user", content: "next" } });
     assert.match(footer.render(120)[0], /◉ TOKENS 1\.242/);
     tools = [...tools, { name: "new-tool", exposure: "deferred", sourceInfo: ownSource }];
-    assert.match(footer.render(80)[0], /⚒ TOOLS 8.*⚡ OWN 3/);
+    assert.match(footer.render(80)[0], /🔧 TOOLS 8.*⚡ OWN 3/);
     tools = [...tools, { name: "external-tool", exposure: "deferred", sourceInfo: { path: join(ownDir.replace(/\/$/, "") + "-other", "external.ts") } }];
-    assert.match(footer.render(80)[0], /⚒ TOOLS 9.*⚡ OWN 3/);
+    assert.match(footer.render(80)[0], /🔧 TOOLS 9.*⚡ OWN 3/);
     activeTools = activeTools.filter(name => name !== "bash");
-    assert.match(footer.render(80)[0], /⚒ TOOLS 8.*⚡ OWN 3/);
+    assert.match(footer.render(80)[0], /🔧 TOOLS 8.*⚡ OWN 3/);
     await new Promise(resolve => setTimeout(resolve, 1100));
     assert.ok(redraws > 0, "periodic refresh works without header animation");
     assert.doesNotMatch(footer.render(120)[0], /Kosten|\$/);
     tools = [];
-    assert.match(footer.render(80)[0], /⚒ TOOLS 0.*⚡ OWN 0/);
+    assert.match(footer.render(80)[0], /🔧 TOOLS 0.*⚡ OWN 0/);
     ctx.ui.theme = { fg: (_color, text) => `\x1b[32m${text}\x1b[0m`, style: text => `\x1b[36m${text}\x1b[0m`, bg: (_color, text) => text };
     for (const width of [0, 1, 10, 40, 80, 120]) {
       const lines = footer.render(width);
@@ -405,6 +407,15 @@ await test("orbital header and message dividers fit narrow terminals and follow 
     const streaming = transform(markdown, { messageType: "assistant", availableWidth: 80, isStreaming: true });
     assert.match(streaming, /\x1b\[1m\x1b\[32m┏ pi-Oomagent /);
     assert.ok(!streaming.includes("┗"), "no closing divider while streaming");
+    for (const width of [40, 110, 160, 240]) {
+      for (const messageType of ["user", "assistant"]) {
+        const content = "Long text ".repeat(80);
+        const framed = transform(content, { messageType, availableWidth: width, isStreaming: false });
+        assert.equal(visibleWidth(framed.split("\n")[0]), width, "border matches the Markdown render width, including wide terminals");
+        assert.equal(visibleWidth(framed.split("\n").at(-1)), width);
+        assert.ok(framed.includes(content), "do not alter Markdown or truncate message content");
+      }
+    }
     const completed = transform(markdown, { messageType: "assistant", availableWidth: 80, isStreaming: false });
     assert.match(completed, /\x1b\[1m\x1b\[32m┗━+┛/);
     assert.ok(completed.includes(markdown));
@@ -597,6 +608,7 @@ await test("footer shows live model and thinking level, including changes while 
   const ctx = {
     mode: "tui", hasUI: true, cwd: "/project",
     get model() { return model; },
+    getContextUsage: () => ({ percent: 23, contextWindow: model?.provider === "anthropic" ? 200000 : 272000 }),
     sessionManager: { getEntries: () => [] },
     ui: {
       theme: { fg: (_color, text) => text, bg: (_color, text) => text, style: text => text },
@@ -608,13 +620,15 @@ await test("footer shows live model and thinking level, including changes while 
   const footer = factory({ requestRender() { redraws++; } });
   try {
     assert.match(footer.render(100).join(" "), /◈ THINKING medium.*◆ openai-codex\/gpt-6\.1-sol/);
+    assert.match(footer.render(200)[1], /gpt-6\.1-sol.*ChatGPT week \?%.*CTX 23\.0% \/ 272k/);
     await commands.get("oom-motion").handler("", ctx);
     const beforeModelChange = redraws;
     model = { provider: "anthropic", id: "another-model" };
     handlers.get("model_select")({ model }, ctx);
     assert.equal(redraws, beforeModelChange + 1, "model changes request an immediate redraw");
     assert.match(footer.render(100).join(" "), /◆ anthropic\/another-model/);
-    assert.doesNotMatch(footer.render(100).join(" "), /gpt-6/);
+    assert.doesNotMatch(footer.render(100).join(" "), /gpt-6|ChatGPT/);
+    assert.match(footer.render(100).join(" "), /CTX 23\.0% \/ 200k/);
     for (const level of ["off", "minimal", "low", "medium", "high", "xhigh", "max"]) {
       thinking = level;
       const beforeLevelChange = redraws;
@@ -657,8 +671,8 @@ await test("non-terminal sessions do not install a footer", () => {
 });
 
 await test("HUD wraps complete telemetry without losing long Unicode values", () => {
-  const theme = { fg: (_color, text) => `\x1b[36m${text}\x1b[0m` };
-  const groups = ["◉ TOKENS 25.976.204*", "⚒ TOOLS 82", "⚡ OWN 13", "◆ custom/日本語-model-e\u0301".repeat(3)];
+  const theme = { fg: (_color, text) => `\x1b[36m${text}\x1b[0m`, style: text => `\x1b[36m${text}\x1b[0m` };
+  const groups = ["◉ TOKENS 25.976.204*", "🔧 TOOLS 82", "⚡ OWN 13", "◆ custom/日本語-model-e\u0301".repeat(3)];
   const plain = s => s.replace(/\x1b\[[0-9;]*m/g, "").replace(/[\s│]/g, "");
   for (const width of [4, 10, 20, 40, 80, 120, 200]) {
     const lines = layoutFooterGroups(groups, width, theme);
@@ -736,4 +750,23 @@ await test("HUD badge animates while idle; response spinner stops; timers clean 
     footer?.dispose(); handlers.get("session_shutdown")();
     interval.mock.restore(); clear.mock.restore(); clock.mock.restore();
   }
+});
+
+
+await test("footer colors distinguish metrics, light mode and usage thresholds", () => {
+  for (const appearance of ["light", "dark"]) {
+    const theme = { appearance };
+    const colors = footerPalette(theme);
+    assert.equal(new Set(Object.values(colors).map(c => JSON.stringify(c))).size, 7);
+    for (const value of [undefined, NaN, Infinity, -1]) {
+      assert.deepEqual(footerUsageColor(value, theme), colors.muted);
+    }
+    for (const value of [0, 17, 74.9]) assert.deepEqual(footerUsageColor(value, theme), colors.cyan);
+    for (const value of [75, 89.9]) assert.deepEqual(footerUsageColor(value, theme), colors.amber);
+    for (const value of [90, 100]) assert.deepEqual(footerUsageColor(value, theme), colors.red);
+  }
+  assert.notDeepEqual(footerPalette({ appearance: "light" }), footerPalette({ appearance: "dark" }));
+  const calls = [];
+  renderFooterTicker(40, 0, { appearance: "dark", style: (text, options) => { calls.push(options); return text; } });
+  assert.deepEqual(calls[0], { fg: footerPalette({ appearance: "dark" }).purple, bold: true });
 });
