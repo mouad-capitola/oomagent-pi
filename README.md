@@ -49,7 +49,7 @@ Only the displayed counter resets: conversation history and Pi's actual session 
 
 Available tools and this package’s own tools remain visible. An `Oomagent-Mouad` neon ticker bounces continuously left to right and back in spare columns; narrow terminals prioritize the counters. Animation is local rendering and makes no model requests.
 
-The second footer line shows `Reactietijd` in seconds, counting thinking, tool calls and automatic continuations until `agent_settled`. It updates live and keeps the last duration until the next request; startup/reload resets it. `Git` shows the local branch, changed-file count and ahead/behind counts when an upstream exists. Git refreshes asynchronously every five seconds and after a response, without fetching; unavailable Git is explicit. Narrow terminals truncate each line safely.
+The second footer line shows `Reactietijd` as minutes and seconds (`0m 59s` → `1m 00s`), counting thinking, tool calls and automatic continuations until `agent_settled`. It updates live and keeps the last duration until the next request; startup/reload resets it. `Git` shows the local branch, changed-file count and ahead/behind counts when an upstream exists. Git refreshes asynchronously every five seconds and after a response, without fetching; unavailable Git is explicit. Narrow terminals truncate each line safely.
 
 The third footer line shows the current `Thinking` level and selected `provider/model`. Both are read from Pi at render time and refresh when the model or thinking level changes, including while animation is paused. No extra model requests are made.
 
@@ -123,3 +123,17 @@ Start `node prototypes/oomagent-layout/preview.mjs` from this repository in a se
 It puts WhatsApp-style chat and input on the left, simulated CodeMode output on the right,
 and reuses the existing footer across the full width. It does **not** connect to an agent,
 execute tools, load credentials or change the running Pi interface. Ctrl+C closes it.
+
+### Secretcontrole vóór Git-acties
+
+`scripts/git-preflight.mjs` controleert nu ook de exacte index-snapshot (pre-commit) en elke uitgaande commit (pre-push) op bekende credentialpatronen en private bestanden, vóór tests draaien. Alleen paden, regels en regelnummers worden gemeld, nooit gematchte waarden. De bestaande hooks gebruiken deze controle; andere repositories krijgen niet automatisch dezelfde hooks.
+
+Los scannen, zonder wijzigingen aan index of geschiedenis:
+
+```sh
+node scripts/secret-scan.mjs --worktree /pad/naar/repository
+node scripts/secret-scan.mjs --tree /pad/naar/repository HEAD
+node scripts/secret-scan.mjs --history /pad/naar/repository
+```
+
+Dit is detectie, geen veiligheidsgarantie: binaire inhoud wordt niet inhoudelijk beoordeeld; blobs boven 2 MiB blokkeren goedkeuring. Lokale env-bestanden worden niet geopend. Historische Git-blobs worden lokaal gescand zonder waarden te tonen. Een eerder gecommitte sleutel vraagt om intrekken/rotatie én afgesproken geschiedenisopschoning; verwijderen uit de huidige code is niet genoeg. Lokale hooks zijn omzeilbaar en vervangen geen beschermde branches of server-side secret protection.

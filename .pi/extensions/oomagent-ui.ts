@@ -35,6 +35,12 @@ export function footerUsageColor(value: number | undefined, theme: Pick<Theme, "
   return value >= 90 ? colors.red : value >= 75 ? colors.amber : colors.cyan;
 }
 
+export function formatResponseDuration(elapsed: number | undefined): string {
+  if (elapsed === undefined || !Number.isFinite(elapsed) || elapsed < 0) return "—";
+  const seconds = Math.floor(elapsed / 1000);
+  return `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, "0")}s`;
+}
+
 export function renderFooterTicker(width: number, frame: number, theme: Theme): string {
   const columns = Math.max(0, width);
   const badge = truncateToWidth(theme.style(FOOTER_BANNER, { fg: footerPalette(theme).purple, bold: true }), columns, "");
@@ -312,7 +318,7 @@ export default function (pi: ExtensionAPI) {
           ];
           const running = responseStarted !== undefined;
           const elapsed = running ? performance.now() - responseStarted! : responseDuration;
-          const duration = elapsed === undefined ? "—" : `${(elapsed / 1000).toFixed(1)}s`;
+          const duration = formatResponseDuration(elapsed);
           const indicator = running ? SPINNER[footerMotion ? tickerFrame % SPINNER.length : 0]
             : responseProblem === "error" ? "!" : responseProblem === "aborted" ? "◇" : elapsed === undefined ? "◇" : "✓";
           const state = running ? "ACTIVE" : responseProblem === "error" ? "ERROR" : responseProblem === "aborted" ? "ABORTED" : elapsed === undefined ? "IDLE" : "READY";
@@ -478,6 +484,7 @@ export default function (pi: ExtensionAPI) {
     });
     // Remove the legacy animated widget; branding now lives in the compact header.
     ctx.ui.setWidget("oomagent-multiverse", undefined);
+    pi.events?.emit("oomagent:ui-ready", ctx);
   });
 
   pi.on("before_agent_start", () => {

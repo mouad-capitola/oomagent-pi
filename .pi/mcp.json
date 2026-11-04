@@ -1,5 +1,16 @@
 {
   "mcpServers": {
+    "playwright": {
+      "command": "npx",
+      "args": [
+        "--yes",
+        "@playwright/mcp@0.0.83",
+        "--config",
+        ".pi/playwright-mcp.json"
+      ],
+      "exposure": "codemode",
+      "description": "Playwright browser tests with a separate in-memory Chromium profile; never shares the personal browser login."
+    },
     "lightpanda": {
       "command": "~/.local/bin/lightpanda",
       "args": [

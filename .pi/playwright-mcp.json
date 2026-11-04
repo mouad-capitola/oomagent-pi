@@ -1,0 +1,19 @@
+{
+  "browser": {
+    "browserName": "chromium",
+    "isolated": true,
+    "launchOptions": {
+      "channel": "chromium",
+      "headless": false
+    },
+    "contextOptions": {
+      "viewport": null
+    }
+  },
+  "webmcp": false,
+  "saveSession": false,
+  "outputDir": "/tmp/oomagent-playwright-mcp",
+  "console": {
+    "level": "error"
+  }
+}

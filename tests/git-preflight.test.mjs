@@ -67,3 +67,28 @@ test("pre-push passes clean commits, skips deletions and rejects malformed input
   assert.equal(run("pre-push", `refs/heads/main ${zero} refs/heads/main ${tip}\n`).status, 0);
   assert.equal(run("pre-push", "invalid\n").status, 1);
 }));
+
+test("pre-commit blocks staged secrets before running tests and never echoes values", () => fixture(({ root, git, run, file }) => {
+  const secret = "abc0123456789def".repeat(4);
+  writeFileSync(file, pass);
+  writeFileSync(join(root, ".env.example"), `MCP_API_KEY=${secret}\n`);
+  git("add", ".");
+  writeFileSync(join(root, ".env.example"), "MCP_API_KEY=\n");
+  const result = run("pre-commit");
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /credential-literal/);
+  assert.ok(!(result.stdout + result.stderr).includes(secret));
+}));
+
+test("pre-push refuses an outgoing secret even if the tip removed it", () => fixture(({ root, git, run, file }) => {
+  writeFileSync(file, pass); git("add", "."); git("commit", "-m", "base");
+  const base = git("rev-parse", "HEAD");
+  writeFileSync(join(root, ".env.example"), `MCP_API_KEY=${"abc0123456789def".repeat(4)}\n`);
+  git("add", "."); git("commit", "-m", "synthetic bad fixture");
+  writeFileSync(join(root, ".env.example"), "MCP_API_KEY=\n");
+  git("add", "."); git("commit", "-m", "clean tip");
+  const tip = git("rev-parse", "HEAD");
+  const result = run("pre-push", `refs/heads/main ${tip} refs/heads/main ${base}\n`);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /credential-literal/);
+}));

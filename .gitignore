@@ -1,2 +1,8 @@
 node_modules
 .env
+
+# Local environment files and backups; only the root example may be shared.
+.env*
+*.env
+*.env.*
+!/.env.example

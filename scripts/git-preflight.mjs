@@ -2,11 +2,17 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { scanGitTree } from "./secret-scan.mjs";
 
 const mode = process.argv[2];
 const git = (...args) => execFileSync("git", args, { encoding: "utf8", timeout: 30_000 }).trim();
 
 function checkSnapshot(root, revision, base) {
+  const security = scanGitTree(root, revision);
+  if (security.findings.length) {
+    for (const { file, line, rule } of security.findings) console.error(JSON.stringify({ file, line, rule }));
+    throw new Error("Geheimen of private bestanden in de Git-snapshot; waarden zijn niet getoond.");
+  }
   const temp = mkdtempSync(join(tmpdir(), "oomagent-preflight-"));
   try {
     // Test an isolated snapshot, never the unstaged working tree.

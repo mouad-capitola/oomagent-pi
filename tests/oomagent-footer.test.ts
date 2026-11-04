@@ -21,7 +21,7 @@ const source = (await readFile(new URL("../.pi/extensions/oomagent-ui.ts", impor
   .replace('"@earendil-works/pi-tui"', JSON.stringify(tuiUrl))
   .replaceAll("import.meta.url", JSON.stringify(new URL("../.pi/extensions/oomagent-ui.ts", import.meta.url).href));
 const load = text => import(`data:text/javascript;base64,${Buffer.from(stripTypeScriptTypes(text)).toString("base64")}`);
-const { parseFooterGitStatus, readFooterGitStatus, messageBorder, sceneLines, readProjectTree, renderProjectPanel, renderFooterTicker, layoutFooterGroups, footerPalette, footerUsageColor } = await load(source);
+const { parseFooterGitStatus, readFooterGitStatus, messageBorder, sceneLines, readProjectTree, renderProjectPanel, renderFooterTicker, layoutFooterGroups, footerPalette, footerUsageColor, formatResponseDuration } = await load(source);
 const { default: register } = await load(source);
 
 await test("footer preserves tokens and available tools; toggles and disposes", async () => {
@@ -254,29 +254,33 @@ await test("footer tracks complete response duration, Git refresh, toggles and u
     await waitFor(/⎇ main · 0 gewijzigd/);
     handlers.get("before_agent_start")();
     now = 1350;
-    assert.match(details(), /[◐◓◑◒] 1\.3s/);
+    assert.match(details(), /[◐◓◑◒] 0m 01s/);
     handlers.get("agent_end")?.({});
     handlers.get("before_agent_start")();
     now = 2600;
-    assert.match(details(), /[◐◓◑◒] 2\.5s/);
+    assert.match(details(), /[◐◓◑◒] 0m 02s/);
     await commands.get("oom-motion").handler("", {
       ...ctx, ui: { ...ctx.ui, notify() {} },
     });
     await commands.get("oom-footer").handler("", ctx);
     await commands.get("oom-footer").handler("", ctx);
     install();
-    assert.match(details(), /[◐◓◑◒] 2\.5s/);
+    assert.match(details(), /[◐◓◑◒] 0m 02s/);
     await writeFile(join(root, "new.txt"), "");
     // Wait for the initial read before requesting the post-response refresh.
     await waitFor(/⎇ main/);
     handlers.get("agent_settled")();
     await waitFor(/⎇ main · 1 gewijzigd/);
     now = 10100;
-    assert.match(details(), /✓ 2\.5s/);
+    assert.match(details(), /✓ 0m 02s/);
     handlers.get("agent_settled")();
-    assert.match(details(), /✓ 2\.5s/);
+    assert.match(details(), /✓ 0m 02s/);
     handlers.get("before_agent_start")();
-    assert.match(details(), /[◐◓◑◒] 0\.0s/);
+    assert.match(details(), /[◐◓◑◒] 0m 00s/);
+    now = 70100;
+    assert.match(details(), /[◐◓◑◒] 1m 00s/);
+    now = 131099;
+    assert.match(details(), /[◐◓◑◒] 2m 00s/);
     handlers.get("session_start")({}, ctx);
     install();
     assert.match(details(), /◇ —/);
@@ -569,22 +573,51 @@ await test("theme validates with Pi's loader", async () => {
   assert.equal(theme.name, "oomagent-swiss");
   assert.equal(theme.appearance, "dark");
   const palette = JSON.parse(await readFile(new URL("../.pi/themes/oomagent-swiss.json", import.meta.url), "utf8"));
-  for (const role of ["customMessageBg", "toolPendingBg", "toolSuccessBg", "toolErrorBg"]) {
-    assert.equal(palette.colors[role], palette.colors.userMessageBg, `${role} matches the user text box`);
+  // Preserve the selected dark palette, including distinct pending/success/error panels.
+  // These literals are intentional expectations, not values inferred from the theme under test.
+  const expectedRolesByColor = {
+    "#569cd6": ["accent","customMessageLabel","mdHeading","mdQuoteBorder","mdListBullet","syntaxKeyword","thinkingLow"],
+    "#454545": ["border","mdCodeBlockBorder","mdHr"],
+    "#007acc": ["borderAccent"],
+    "#333333": ["borderMuted"],
+    "#89d185": ["success","toolDiffAdded"],
+    "#f48771": ["error","toolDiffRemoved"],
+    "#cca700": ["warning"],
+    "#9d9d9d": ["muted","thinkingText","mdQuote","thinkingMinimal"],
+    "#858585": ["dim","toolDiffContext","thinkingOff"],
+    "#d4d4d4": ["text","userMessageText","customMessageText","toolOutput","mdCodeBlock","syntaxOperator","syntaxPunctuation"],
+    "#264f78": ["selectedBg"],
+    "#252526": ["scrollbarTrack","userMessageBg","customMessageBg","toolPendingBg"],
+    "#797979": ["scrollbarThumb"],
+    "#613214": ["searchMatchBg"],
+    "#ffffff": ["searchMatchText"],
+    "#1e1e1e": ["toolSuccessBg"],
+    "#332222": ["toolErrorBg"],
+    "#dcdcaa": ["toolTitle","syntaxFunction","thinkingXhigh","bashMode"],
+    "#3794ff": ["mdLink"],
+    "#9cdcfe": ["mdLinkUrl","syntaxVariable"],
+    "#ce9178": ["mdCode","syntaxString","thinkingMax"],
+    "#6a9955": ["syntaxComment"],
+    "#b5cea8": ["syntaxNumber"],
+    "#4ec9b0": ["syntaxType","thinkingMedium"],
+    "#c586c0": ["thinkingHigh"],
+  };
+  const expectedColors = Object.fromEntries(Object.entries(expectedRolesByColor)
+    .flatMap(([color, roles]) => roles.map(role => [role, color])));
+  assert.deepEqual(palette.colors, expectedColors);
+  assert.equal(palette.vars.white, "#ffffff");
+  assert.deepEqual(palette.export, { pageBg: "#1e1e1e", cardBg: "#252526", infoBg: "#2d2d30" });
+  for (const role of Object.keys(expectedColors)) {
+    const background = role.endsWith("Bg");
+    const ansi = background ? theme.getBgAnsi(role) : theme.getFgAnsi(role);
+    assert.match(ansi, /\x1b\[[0-9;]+m/, role + " resolves to a terminal color");
+    assert.notEqual(ansi, background ? "\x1b[49m" : "\x1b[39m", role + " is not the terminal default");
+  }
+  for (const role of ["customMessageBg", "toolPendingBg"]) {
     assert.equal(theme.bg(role, "output"), theme.bg("userMessageBg", "output"));
   }
-  assert.equal(palette.vars.white, "#ffffff");
-  for (const [role, value] of Object.entries(palette.colors)) {
-    if (role.endsWith("Bg")) {
-      assert.equal(value, "", `${role} uses the terminal background`);
-      assert.equal(theme.getBgAnsi(role), "\x1b[49m");
-    } else {
-      const expected = role === "borderMuted" ? "red" : role === "borderAccent" ? "green" : "white";
-      assert.equal(value, expected, `${role} uses the intended foreground`);
-      if (expected === "white") assert.equal(theme.getFgAnsi(role), theme.getFgAnsi("text"));
-      else assert.notEqual(theme.getFgAnsi(role), theme.getFgAnsi("text"));
-    }
-  }
+  assert.notEqual(theme.bg("toolSuccessBg", "output"), theme.bg("toolPendingBg", "output"));
+  assert.notEqual(theme.bg("toolErrorBg", "output"), theme.bg("toolSuccessBg", "output"));
   assert.ok(theme.fg("accent", "OomAgent").includes("OomAgent"));
   const ticker = renderFooterTicker(28, 1, theme);
   assert.equal(visibleWidth(ticker), 28);
@@ -728,9 +761,9 @@ await test("HUD badge animates while idle; response spinner stops; timers clean 
     now = 42900;
     handlers.get("agent_settled")();
     assert.equal(animations().length, 1);
-    assert.match(footer.render(120).join(" "), /✓ 42\.8s · READY/);
+    assert.match(footer.render(120).join(" "), /✓ 0m 42s · READY/);
     now = 90000;
-    assert.match(footer.render(120).join(" "), /✓ 42\.8s/);
+    assert.match(footer.render(120).join(" "), /✓ 0m 42s/);
     for (const reason of ["error", "aborted"]) {
       handlers.get("before_agent_start")();
       handlers.get("message_end")({ message: { role: "assistant", stopReason: reason } });
@@ -769,4 +802,13 @@ await test("footer colors distinguish metrics, light mode and usage thresholds",
   const calls = [];
   renderFooterTicker(40, 0, { appearance: "dark", style: (text, options) => { calls.push(options); return text; } });
   assert.deepEqual(calls[0], { fg: footerPalette({ appearance: "dark" }).purple, bold: true });
+});
+
+await test("response duration rolls seconds into minutes without premature rounding", () => {
+  for (const [ms, expected] of [
+    [0, "0m 00s"], [999, "0m 00s"], [1000, "0m 01s"],
+    [59999, "0m 59s"], [60000, "1m 00s"], [61000, "1m 01s"],
+    [119999, "1m 59s"], [120000, "2m 00s"], [3600000, "60m 00s"],
+  ]) assert.equal(formatResponseDuration(ms), expected);
+  for (const value of [undefined, NaN, Infinity, -1]) assert.equal(formatResponseDuration(value), "—");
 });
