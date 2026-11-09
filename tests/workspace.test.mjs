@@ -163,17 +163,6 @@ test("welcome consumes ready locally and supports cancel and centered resize", (
   assert.equal(ready, true);
   screen.handleInput("\x1b"); assert.equal(ready, false);
 });
-test("tmux workbench leaves the internal workspace disabled without registering handlers", () => {
-  const previous = process.env.OOMAGENT_TMUX;
-  try {
-    process.env.OOMAGENT_TMUX = "1";
-    register(new Proxy({}, { get() { assert.fail("Internal workspace registered inside tmux"); } }));
-  } finally {
-    if (previous === undefined) delete process.env.OOMAGENT_TMUX;
-    else process.env.OOMAGENT_TMUX = previous;
-  }
-});
-
 test("non-TUI sessions never install UI or start welcome screen", async () => {
   const handlers = new Map();
   register({ on: (name, fn) => handlers.set(name, fn), events: { on() {} }, registerCommand() {} });

@@ -7,8 +7,6 @@ import { WorkspaceEditor, WorkspaceState, WelcomeScreen } from "../lib/workspace
 import { projectFor, readDocument, safeLabel, TextBuffer } from "../lib/workspace-files.mjs";
 
 export default function workspace(pi: ExtensionAPI) {
-  // Neovim owns the file editor in the opt-in tmux launcher; other Pi UI stays intact.
-  if (process.env.OOMAGENT_TMUX === "1") return;
   const root = join(homedir(), "Projects");
   const drafts = join(resolve(process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi/agent")), "workspace-drafts");
   let state: WorkspaceState | undefined;

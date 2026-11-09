@@ -223,7 +223,7 @@ class BrandEditor extends CustomEditor {
   }
 }
 
-export default function (pi: ExtensionAPI) {
+export default function (pi: ExtensionAPI, { footerOnly = false, gitCwd }: { footerOnly?: boolean; gitCwd?: string } = {}) {
   let footerEnabled = true;
   let footerMotion = true;
   let disposeFooter: (() => void) | undefined;
@@ -250,7 +250,7 @@ export default function (pi: ExtensionAPI) {
         if (disposed || readingGit) return;
         readingGit = true;
         try {
-          const next = await readFooterGitStatus(ctx.cwd);
+          const next = await readFooterGitStatus(gitCwd ?? ctx.cwd);
           if (!disposed) gitStatus = next;
         } catch {
           if (!disposed) gitStatus = undefined;
@@ -371,13 +371,13 @@ export default function (pi: ExtensionAPI) {
   let currentTheme: (() => Theme) | undefined;
 
   // Pi 1.0.4 renderer composition: presentation only, never override execution.
-  pi.registerToolRenderer?.((toolName, next) => {
+  if (!footerOnly) pi.registerToolRenderer?.((toolName, next) => {
     const base = next();
     return toolName === "codemode" && base?.renderCall && base?.renderResult
       ? frameCodemode(base) : base;
   });
 
-  pi.registerMarkdownTransformer((markdown, context) => {
+  if (!footerOnly) pi.registerMarkdownTransformer((markdown, context) => {
     if (!active || !currentTheme || context.messageType === "assistant-thinking" || !markdown.trim()) return markdown;
     const width = Math.max(0, context.availableWidth);
     const user = context.messageType === "user";
@@ -398,6 +398,7 @@ export default function (pi: ExtensionAPI) {
     usageBaseline = new Set((ctx.sessionManager?.getEntries?.() ?? []).map(entry => entry.id ?? entry));
     installFooter(ctx);
     quota.start(ctx);
+    if (footerOnly) return;
     currentTheme = () => ctx.ui.theme;
     splash = false;
     const selected = ctx.ui.setTheme("oomagent-swiss");
@@ -546,7 +547,7 @@ export default function (pi: ExtensionAPI) {
       installFooter(ctx);
     },
   });
-  pi.registerCommand("oom-tree", {
+  if (!footerOnly) pi.registerCommand("oom-tree", {
     description: "Show or hide the project folder panel",
     handler: async (_args, ctx) => {
       if (ctx.mode !== "tui" || !ctx.hasUI) return;
@@ -554,7 +555,7 @@ export default function (pi: ExtensionAPI) {
       redraw?.();
     },
   });
-  pi.registerCommand("oom-screen", {
+  if (!footerOnly) pi.registerCommand("oom-screen", {
     description: "Show or hide the orbital node network",
     handler: async (_args, ctx) => {
       if (ctx.mode !== "tui" || !ctx.hasUI) return;
