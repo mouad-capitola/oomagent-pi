@@ -1,5 +1,33 @@
 # Deze Pi + TUIOS op Windows
 
+## Native PowerShell / Command Prompt (geen Ubuntu)
+
+Nieuw: `setup.ps1` installeert op **Windows x64**, vanuit Windows PowerShell 5.1 of nieuwer. Gebruik bij voorkeur Windows Terminal. Installeer eerst Git for Windows:
+
+```powershell
+winget install --exact --id Git.Git
+```
+
+Open daarna een **nieuw PowerShell-venster**:
+
+```powershell
+New-Item -ItemType Directory -Force "$HOME\Projects" | Out-Null
+Set-Location "$HOME\Projects"
+git clone https://github.com/mouad-capitola/oomagent-pi.git
+Set-Location oomagent-pi
+powershell -NoProfile -ExecutionPolicy Bypass -File .\setup.ps1
+```
+
+Heb je de clone al, gebruik dan daarin `git pull --ff-only` en voer `setup.ps1` opnieuw uit. Na een geslaagde installatie: `./pi.cmd` voor Pi, of `./tuios.cmd` voor TUIOS. Typ in een TUIOS-terminal `pi.cmd`. In Pi: `/login`, eventueel `/model`.
+
+De native installer bouwt **dezelfde gepinde Pi-broncode met chatframe-patch** en laadt het thema, de footer, het startscherm en de extensies. Hij installeert Node, TUIOS, Python/documenttools, Serena, Playwright en de hello-MCP-server. Git Bash is alleen een Windows-onderdeel van Git for Windows voor de build en Pi's `!`-commando's; **geen Ubuntu/WSL**. De model-facing shelltool is PowerShell.
+
+**Verschillen/beperkingen:** Lightpanda en ZAP worden door deze native installer niet ingesteld. Exa vereist je eigen `EXA_API_KEY`. GitHub CLI, Neovim en andere optionele systeemtools worden niet automatisch geïnstalleerd. Docker is niet nodig. TUIOS gebruikt zijn Windows-defaults en standalone-modus. Deze nieuwe Windows-route is nog **niet end-to-end op Windows bevestigd**; de Windows CI-workflow controleert installatie en CLI's. Lokale configuratietests zijn geen bewijs van terminalweergave op Windows.
+
+Native runtime/configuratie staat in de genegeerde `.portable/windows/`; bestaande instellingen/logins worden behouden. De launcher behoudt je werkmap. Alleen binnen deze configuratierepository worden de Linux-specifieke projectdefaults overgeslagen; de Windows-versie laadt haar resources globaal. Andere projecten houden de normale Pi-trustcontrole. Verplaats de clone niet na installatie zonder configuratiepaden bij te werken.
+
+## Alternatief: Linux/WSL (niet nodig voor bovenstaande route)
+
 Gebruik **Windows Terminal → Ubuntu 24.04 of nieuwer (WSL2)**. Native PowerShell/Git Bash is niet het doel van deze installer; Lightpanda heeft geen native Windows-build.
 
 ## Eenmalig
