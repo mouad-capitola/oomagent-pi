@@ -1,4 +1,0 @@
-# Same startup preferences as the source Mac; no sessions or host identities.
-[startup]
-tiled = true
-daemon = false

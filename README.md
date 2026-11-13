@@ -1,7 +1,5 @@
 # Oomagent Pi configuration
 
-**Windows/WSL2: [install this Pi + TUIOS + tools](WINDOWS.md).** Clone this repo, run `bash setup.sh`, then `./pi` or `./tuios`. No application repositories or `Projects` directory are required; log in separately. The installer does not modify the existing Mac installation.
-
 Shared project-specific configuration for Pi. No application logic is included.
 
 Start Pi from this repository and approve project trust after reviewing the configuration. Use `/reload` if Pi is already running.

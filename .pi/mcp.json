@@ -13,7 +13,7 @@
       "description": "Playwright browser tests with a separate in-memory Chromium profile; never shares the personal browser login."
     },
     "lightpanda": {
-      "command": "lightpanda",
+      "command": "~/.local/bin/lightpanda",
       "args": [
         "mcp",
         "--block-private-networks",
@@ -34,7 +34,7 @@
         "--python",
         "3.13",
         "--script",
-        "~/.local/share/oomagent-mcp-pi/server.py"
+        "/Users/buurtkamer/Projects/oomagent-test/oomagent-mcp-pi/server.py"
       ],
       "exposure": "codemode",
       "description": "Lokale MCP bridge naar mijn OomAgent Pi coding agent"
@@ -42,7 +42,7 @@
     "zap": {
       "url": "http://127.0.0.1:8282/",
       "headers": {
-        "Authorization": "!python3 portable/zap-key.py"
+        "Authorization": "!python3 -c \"from pathlib import Path; import xml.etree.ElementTree as E; key=E.parse(Path.home() / 'Library/Application Support/ZAP/config.xml').getroot().findtext('mcp/securityKey'); assert key, 'ZAP MCP key missing'; print(key, end='')\""
       },
       "exposure": "codemode",
       "description": "Lokale ZAP securitytests en scanresultaten. Start scans alleen met expliciete toestemming voor het doelwit."

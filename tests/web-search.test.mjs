@@ -5,14 +5,13 @@ import { readFile } from "node:fs/promises";
 
 // Exercise the full registered tool with mocked Keychain, HTTP and summaries.
 // No real credentials, subprocesses or external API requests are used.
-const deps = { process: { platform: "darwin", env: {} } };
+const deps = {};
 globalThis.__webSearchTest = deps;
 const source = (await readFile(new URL("../.pi/extensions/web-search.ts", import.meta.url), "utf8"))
   .replace(/^import .*;\n/gm, "")
   .replace("const keychainCommand = promisify(execFile);", "");
 const prelude = `
 const deps = globalThis.__webSearchTest;
-const process = deps.process;
 const Type = Object.fromEntries(["Object", "String", "Optional", "Integer", "Boolean"].map(name => [name, value => value]));
 const defineTool = value => value;
 const keychainCommand = (...args) => deps.keychain(...args);
@@ -29,8 +28,6 @@ const row = (url = "https://nodejs.org/docs", extra = {}) => ({ url, title: "Nod
 const jsonResponse = payload => new Response(JSON.stringify(payload), { headers: { "content-type": "application/json" } });
 
 function fixture() {
-  deps.process.platform = "darwin";
-  deps.process.env = {};
   const calls = { keychain: [], fetch: [], summaries: [] };
   deps.keychain = async (...args) => { calls.keychain.push(args); return { stdout: fakeKey + "\n" }; };
   deps.fetch = async (...args) => { calls.fetch.push(args); return jsonResponse({ results: [row()] }); };
@@ -65,27 +62,6 @@ await test("Exa POST uses Keychain service exa and never returns the key", async
   assert.match(result.content[0].text, /Untrusted/);
   assert.ok(!JSON.stringify(result).includes(fakeKey));
   assert.equal(calls.summaries.length, 0);
-});
-
-await test("Linux uses EXA_API_KEY without Keychain and never returns it", async () => {
-  const calls = fixture();
-  deps.process.platform = "linux";
-  deps.process.env.EXA_API_KEY = fakeKey;
-  const result = await execute();
-  assert.equal(calls.keychain.length, 0);
-  assert.equal(calls.fetch[0][1].headers["x-api-key"], fakeKey);
-  assert.ok(!JSON.stringify(result).includes(fakeKey));
-});
-
-await test("Linux missing/invalid credentials fail before HTTP without leaking secrets", async () => {
-  for (const key of [undefined, "", "a\nb"]) {
-    const calls = fixture();
-    deps.process.platform = "linux";
-    if (key !== undefined) deps.process.env.EXA_API_KEY = key;
-    await assert.rejects(execute(), /EXA_API_KEY/);
-    assert.equal(calls.fetch.length, 0);
-    assert.equal(calls.keychain.length, 0);
-  }
 });
 
 await test("website filter includes subdomains, excludes lookalikes and preserves summary options", async () => {
