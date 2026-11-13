@@ -1,0 +1,8 @@
+# Release tag, asset, SHA-256. Includes MCP's minimum dependency versions.
+mcp-v0.4.0 mcp-alpha-0.4.0.zap 4aef855074cdc1e19bc40d281fa52d72d8f73a249d4cada73c0aab808f4d12c0
+automation-v0.62.0 automation-beta-0.62.0.zap ea47570f309db7a816c9d68c0c60060f7159bb3e89770df3d4dbb9f4574d45a6
+commonlib-v1.44.0 commonlib-release-1.44.0.zap 6450205e07248c20e9c8de185268cf1cd571f3cec7f7c0e5d10178b2126834f9
+network-v0.33.0 network-beta-0.33.0.zap 383f816fd5663d359f7bbde662f9a4aaf3fc9de8c59053a4abf7551e3a87d56f
+pscan-v0.6.0 pscan-alpha-0.6.0.zap 269ff66f0d8a8012f156e90e13238606a8d503b99521170649b62c9aa7295927
+reports-v0.46.0 reports-release-0.46.0.zap 2e8d42a48e23aefa8a6174b52aa0a8a6b90aca2da0a8bf94ac61f4aaa070bc2c
+spider-v0.20.0 spider-release-0.20.0.zap 82acf7e307fdd4f46ac4d387656370ecad9c2ab940e1c81d9776768bacdedcd5

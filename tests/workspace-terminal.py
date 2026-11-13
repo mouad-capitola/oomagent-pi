@@ -50,12 +50,12 @@ with tempfile.TemporaryDirectory(prefix="pi-workspace-pty-") as temp:
     alive = True
     mark = 0
 
-    def read_until(needle, timeout=15):
+    def read_until(needle, timeout=15, raw=False):
         start = mark
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             # The fake text cursor can insert SGR codes inside a visible word.
-            visible = re.sub(rb"\x1b\[[0-?]*[ -/]*[@-~]", b"", output[start:])
+            visible = output[start:] if raw else re.sub(rb"\x1b\[[0-?]*[ -/]*[@-~]", b"", output[start:])
             if needle.encode() in visible:
                 return
             readable, _, _ = select.select([fd], [], [], 0.1)
@@ -85,9 +85,22 @@ with tempfile.TemporaryDirectory(prefix="pi-workspace-pty-") as temp:
                         raise
                     break
 
+    def wait_for_chat(new_process=False):
+        global mark
+        if new_process:
+            # Ignore frames from the old process while a confirmed restart exits.
+            read_until("\x1b[?1049h", timeout=20, raw=True)
+            mark = output.index(b"\x1b[?1049h", mark)
+        read_until("◉ TOKENS")
+        visible = re.sub(rb"\x1b\[[0-?]*[ -/]*[@-~]", b"", output[mark:])
+        assert b"Typ ready" not in visible, "welcome screen must not block chat"
+        assert b"Actief:" not in visible, "workspace panels must start hidden"
+
     try:
-        read_until("Typ ready")
-        send(b"ready\r")
+        wait_for_chat(new_process=True)
+        send(b"/reload\r")
+        wait_for_chat()
+        send(b"/workspace\r")
         read_until("Actief:")
         send(b"\x1bOQ")  # F2: tree
         send(b"\r")  # expand alpha
@@ -116,8 +129,8 @@ with tempfile.TemporaryDirectory(prefix="pi-workspace-pty-") as temp:
         read_until("Project activeren")
         # Pi confirm uses Yes / No, selected Yes.
         send(b"\r")
-        read_until("Typ ready", timeout=20)
-        send(b"ready\r")
+        wait_for_chat(new_process=True)
+        send(b"/workspace\r")
         read_until("Actief:")
         assert b"Projects/alpha" in output[mark:], "active project did not change"
         # Leave a dirty editor buffer, quit, then check private recovery storage.
@@ -158,8 +171,8 @@ with tempfile.TemporaryDirectory(prefix="pi-workspace-pty-") as temp:
         alive = True
         fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 120, 0, 0))
         mark = len(output)
-        read_until("Typ ready")
-        send(b"ready\r")
+        wait_for_chat(new_process=True)
+        send(b"/workspace\r")
         read_until("Actief:")
         send(b"/workspace-recover\r")
         read_until("Kies een lokaal concept")
@@ -186,7 +199,8 @@ with tempfile.TemporaryDirectory(prefix="pi-workspace-pty-") as temp:
                     pass
         assert not alive
         assert b"Extension error" not in output
-        print("PASS: branded Pi -> ready -> tree -> edit/save -> confirmed project restart -> private draft -> recovery/save -> resize -> quit (offline PTY)")
+        assert b"Typ ready" not in re.sub(rb"\x1b\[[0-?]*[ -/]*[@-~]", b"", output)
+        print("PASS: direct chat -> reload -> /workspace -> tree -> edit/save -> confirmed project restart -> private draft -> recovery/save -> resize -> quit (offline PTY)")
     finally:
         if alive:
             os.kill(pid, signal.SIGTERM)

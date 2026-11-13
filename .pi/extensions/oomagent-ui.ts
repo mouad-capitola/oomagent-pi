@@ -7,6 +7,7 @@ import { CustomEditor, type ExtensionAPI, type ExtensionContext, type Theme } fr
 import { createQuotaMonitor, formatContext, formatQuota, isCodex } from "../lib/footer-limits.ts";
 import { frameCodemode } from "../lib/codemode-frame.ts";
 import { sessionTokenUsage } from "../lib/footer-metrics.ts";
+import { isWorkspaceProject } from "../lib/project-presentation.mjs";
 import { rgbColor, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 
 const execFileAsync = promisify(execFile);
@@ -361,6 +362,7 @@ export default function (pi: ExtensionAPI, { footerOnly = false, gitCwd }: { foo
     } : undefined);
   };
 
+  let headerVisible = true;
   let treeEnabled = true;
   let active = false;
   let splash = false;
@@ -400,10 +402,13 @@ export default function (pi: ExtensionAPI, { footerOnly = false, gitCwd }: { foo
     quota.start(ctx);
     if (footerOnly) return;
     currentTheme = () => ctx.ui.theme;
+    headerVisible = pi.getSettings?.().quietStartup !== true;
     splash = false;
     const selected = ctx.ui.setTheme("oomagent-swiss");
     if (!selected.success) ctx.ui.notify(selected.error || "Oomagent theme could not be loaded.", "warning");
     ctx.ui.setTitle(BRAND);
+    // Keep shared footer/message styling, but leave other projects' editor alone.
+    if (!isWorkspaceProject(ctx.cwd)) return;
     ctx.ui.setEditorComponent((tui, theme, keys) => {
       const editor = new BrandEditor(tui, theme, keys);
       editor.brandBorder = text => ctx.ui.theme.fg("dim", text);
@@ -417,7 +422,7 @@ export default function (pi: ExtensionAPI, { footerOnly = false, gitCwd }: { foo
       let treeError = false;
       let readingTree = false;
       const refreshTree = async () => {
-        if (disposed || readingTree || !treeEnabled || !ctx.cwd) return;
+        if (disposed || readingTree || !headerVisible || !treeEnabled || !ctx.cwd) return;
         readingTree = true;
         try {
           const next = await readProjectTree(ctx.cwd);
@@ -447,6 +452,7 @@ export default function (pi: ExtensionAPI, { footerOnly = false, gitCwd }: { foo
         dispose,
         invalidate() {},
         render(width: number): string[] {
+          if (!headerVisible) return [];
           const theme = ctx.ui.theme;
           const paint = (text: string) => theme.bg("userMessageBg", fit(text, width));
           const withTree = (lines: string[]) => treeEnabled && ctx.cwd
@@ -551,7 +557,9 @@ export default function (pi: ExtensionAPI, { footerOnly = false, gitCwd }: { foo
     description: "Show or hide the project folder panel",
     handler: async (_args, ctx) => {
       if (ctx.mode !== "tui" || !ctx.hasUI) return;
-      treeEnabled = !treeEnabled;
+      if (!isWorkspaceProject(ctx.cwd)) return;
+      treeEnabled = headerVisible ? !treeEnabled : true;
+      headerVisible = true;
       redraw?.();
     },
   });
@@ -559,6 +567,8 @@ export default function (pi: ExtensionAPI, { footerOnly = false, gitCwd }: { foo
     description: "Show or hide the orbital node network",
     handler: async (_args, ctx) => {
       if (ctx.mode !== "tui" || !ctx.hasUI) return;
+      if (!isWorkspaceProject(ctx.cwd)) return;
+      headerVisible = true;
       splash = !splash;
       redraw?.();
     },

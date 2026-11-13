@@ -2,19 +2,24 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { createRequire } from "node:module";
 
 // Set PI_TEST_RUNTIME_DIST to test the installed Pi runtime instead of the older
 // project peer. No session authentication, tool execution, or provider calls.
 test("native Pi renders message borders and a single closed codemode frame", async t => {
   const root = process.env.PI_TEST_RUNTIME_DIST ?? dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent")));
   const load = path => import(pathToFileURL(join(root, path)).href);
+  const hostRequire = createRequire(join(root, "../package.json"));
+  const { visibleWidth } = await import(pathToFileURL(hostRequire.resolve("@earendil-works/pi-tui")).href);
   const { loadExtensions } = await load("core/extensions/loader.js");
   const themes = await load("modes/interactive/theme/theme.js");
   const cwd = fileURLToPath(new URL("../", import.meta.url));
   const result = await loadExtensions([join(cwd, ".pi/extensions/oomagent-ui.ts")], cwd);
   assert.equal(result.errors.length, 0);
   const ext = result.extensions[0];
+  // This renderer-only harness dispatches session_start without AgentSession.
+  // Bind the settings read that Pi normally initializes before that event.
+  result.runtime.getSettings = () => ({ quietStartup: false });
   if (!ext.toolRenderers?.length) { t.skip("Tool renderer composition requires Pi 1.0.4; set PI_TEST_RUNTIME_DIST"); return; }
   const { ToolExecutionComponent } = await load("modes/interactive/components/tool-execution.js");
   const { UserMessageComponent } = await load("modes/interactive/components/user-message.js");
@@ -26,8 +31,9 @@ test("native Pi renders message borders and a single closed codemode frame", asy
     for (const fn of ext.handlers.get("session_start")) await fn({}, { mode: "tui", hasUI: true, ui, sessionManager: { getEntries: () => [] } });
     const text = "Lange tekst blijft binnen het kader. 日本語 **vet** ".repeat(35) + '\n\n```js\nconst value = "' + "x".repeat(300) + '";\n```';
     const msg = { role: "assistant", content: [{ type: "text", text }], api: "test", provider: "test", model: "test", stopReason: "stop", timestamp: 0 };
-    const user = new UserMessageComponent(text, undefined, 1, [ext.markdownTransformer]);
-    const assistant = new AssistantMessageComponent(msg, false, undefined, undefined, 1, [ext.markdownTransformer]);
+    const transformer = ext.markdownTransformer.transformer;
+    const user = new UserMessageComponent(text, undefined, 1, [transformer]);
+    const assistant = new AssistantMessageComponent(msg, false, undefined, undefined, 1, [transformer]);
     const renders = ext.toolRenderers[0]("codemode", () => codemodeRenderers);
     assert.equal(ext.toolRenderers[0]("bash", () => codemodeRenderers), codemodeRenderers, "other tools unchanged");
     const tool = new ToolExecutionComponent("codemode", "test-id", { code: 'text("' + "日本語 ".repeat(50) + '")' }, { showImages: false }, renders, { requestRender() {} }, cwd);

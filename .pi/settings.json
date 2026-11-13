@@ -1,11 +1,13 @@
 {
-  "defaultTools": ["+grep", "+find", "+ls", "+codemode", "+tool_search"],
+  "defaultTools": ["read", "bash", "edit", "write", "grep", "find", "ls", "tool_search"],
+  "extensions": ["-builtin:codemode"],
   "codemode": {
-    "mode": "only",
+    "mode": "on",
     "inlineBudget": 0
   },
   "theme": "oomagent-swiss",
   "tuiMode": "fullscreen",
+  "quietStartup": true,
   "packages": [
     {
       "source": "npm:pi-chatgpt-limit",

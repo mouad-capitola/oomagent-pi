@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+source "$ROOT/portable/env.sh"
+case "${1:-}" in
+  doctor) shift; exec node "$ROOT/portable/doctor.mjs" "$@" ;;
+  zap) shift; exec node "$ROOT/portable/zap.mjs" "$@" ;;
+  '') printf 'Usage: ./tools doctor | zap start|stop|status | <command> [args...]\n' ;;
+  *) exec "$@" ;;
+esac

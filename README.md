@@ -1,11 +1,13 @@
 # Oomagent Pi configuration
 
+**Windows/WSL2: [install this Pi + TUIOS + tools](WINDOWS.md).** Clone this repo, run `bash setup.sh`, then `./pi` or `./tuios`. No application repositories or `Projects` directory are required; log in separately. The installer does not modify the existing Mac installation.
+
 Shared project-specific configuration for Pi. No application logic is included.
 
 Start Pi from this repository and approve project trust after reviewing the configuration. Use `/reload` if Pi is already running.
 
 - `AGENTS.md`: repository instructions.
-- `.pi/settings.json`: enables `grep`, `find`, `ls`, `codemode`, and `tool_search` alongside the inherited default tools.
+- `.pi/settings.json`: explicitly enables `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`, and `tool_search`; disables the built-in codemode extension with `extensions: ["-builtin:codemode"]`. MCP's existing `autoEnableCodemode: false` is retained. Restart Pi to apply the complete tool selection; `/reload` alone does not disable removed tools.
 - `.pi/APPEND_SYSTEM.md`: symlink to `.pi/system-prompt.md`, containing the always-available persona and safety guidance.
 - `.pi/extensions/oomagent-context.ts`: omits local `AGENTS.md`/`AGENTS.override.md`/`CLAUDE.md` content from the model prompt for exact greetings and thanks before a task in the active branch. Real tasks, ambiguous messages and image attachments keep all rules; after a task, follow-ups keep them too. Ancestor/user instructions are never removed. Pi still discovers these files locally; this changes model context, not filesystem loading or access permissions.
 - `.pi/extensions/oomagent-tools.ts`: read-only `project_info` tool returning the working directory, Git branch, and repository root. Unavailable Git values are `null`; detached HEAD has no branch.
@@ -16,7 +18,7 @@ Pi loads the TypeScript extensions directly and supplies their peer dependencies
 
 `AGENTS.md` contains the ten-step development workflow: understand → Serena exploration → impact analysis → small plan → targeted changes → automated checks → functional validation → investigate failures → diff review → concise report. It is omitted from a greeting-only model request and included when work starts.
 
-After `/reload`, start a **new session** to evaluate greeting context: existing conversations retain earlier instructions and tool output. Lazy tool descriptions are already enabled (`codemode.mode: "only"`, `inlineBudget: 0`). The always-loaded prompt is kept compact; verify recorded provider usage after a fresh `hi` with the same model and configuration. No fixed token total is guaranteed: base instructions, skill descriptions, tools and MCP configuration also contribute. The custom footer sums recorded provider usage since its last reset, including full input and cache tokens. The automated context tests check prompt sections and transitions, not provider token counts or generated answers.
+After `/reload`, start a **new session** to evaluate greeting context: existing conversations retain earlier instructions and tool output. Codemode is disabled; standard tools remain directly declared and `tool_search` can load MCP tools without scripts. The inert `codemode.mode: "on"` setting also avoids hiding standard tools if codemode is explicitly re-enabled later. The always-loaded prompt is kept compact; verify recorded provider usage after a fresh `hi` with the same model and configuration. No fixed token total is guaranteed: base instructions, skill descriptions, tools and MCP configuration also contribute. The custom footer sums recorded provider usage since its last reset, including full input and cache tokens. The automated context tests check prompt sections and transitions, not provider token counts or generated answers.
 
 ## Shared prompt templates
 
@@ -28,6 +30,12 @@ Run `/reload` to load the templates in `.pi/prompts/` as slash commands:
 - `/oplevering [agent or release]`: evidence-based delivery advice, not deployment authorization.
 
 Arguments are optional; templates use the current conversation or ask for missing context. For example: `/code-review "API compatibility"`. Each template delegates to its existing skill, preserves safety boundaries and does not authorize commits or pushes. Prompt templates are reusable instructions, not executable checks or a security boundary.
+
+## Libraries before custom code
+
+The [`libraries-first` skill](.pi/skills/libraries-first/SKILL.md) applies to tests, debugging, code changes, tooling and integrations. Check existing dependencies and platform APIs first, then research suitable libraries before building custom infrastructure. Report unsuitable options or blocked research explicitly and discuss a custom alternative before implementing it. Installing or upgrading still requires approval.
+
+Run `/reload` to discover it; `/skill:libraries-first [task]` loads it explicitly. Automatic skill selection is model-driven, not guaranteed. `node --test tests/skills.test.mjs` checks discovery and required instruction text, not model compliance.
 
 ## Shared agent-delivery skills
 
@@ -41,7 +49,15 @@ Each skill includes a report template under its `assets/` directory. These are i
 
 ## OomAgent interface
 
-The `oomagent-swiss` theme and `.pi/extensions/oomagent-ui.ts` provide an EVE Planetary Interaction-inspired orbital workspace: charcoal panels, amber/turquoise node rings, dotted links, a restrained engineering header, a project folder panel and node-style message dividers. This is a terminal adaptation, not a graphical replica. The existing theme name is kept for compatibility. Tools and MCP configuration are unchanged.
+`.pi/extensions/oomagent-start.ts` installs a persistent, read-only diagram above the editor showing this repository's actual names (not the session's unrelated cwd). No overlay, dismissal or keyboard interception: typing, arrows and Enter keep their normal editor behavior. `📁 oomagent-pi` is centered above an organigram with folder columns and multiple files stacked underneath each branch. The diagram uses the middle 60% of terminal width (approximately 20% margin per side) and at most 40% of terminal rows, leaving room for chat/editor/footer. Root files and collapsed items share an explicitly labelled presentation column, not a fabricated directory.
+
+`/oom-start volgende` and `vorige` change column groups; `omlaag` and `omhoog` scroll longer branches. Row/group counts indicate remaining content. `/oom-start verberg` hides it; `/oom-start toon` rescans and shows it. `/oom-start` lists these commands. Startup, reload and session switches reinstall the widget.
+
+The root is depth 0; show three levels below it, including hidden names. `.git` and `node_modules` are marked collapsed, depth-limited folders are marked, and symlinks are labelled but never traversed. No file contents or credentials are read. Unreadable/disappeared paths and the defensive 10,000-item scan limit are explicitly marked. Pi's native widget, ScrollView and Unicode width helpers are reused, without new dependencies. Very narrow terminals clip labels/help; very short terminals prioritize the editor and may only show the diagram heading. Enlarge the terminal to see more files at once.
+
+The workspace extension (`.pi/extensions/oomagent-workspace.ts`) starts directly in chat, without the date/`ready` welcome screen. Open its project/file panels explicitly with `/workspace` or `F2`; existing workspace commands and draft recovery remain available.
+
+The `oomagent-swiss` theme and `.pi/extensions/oomagent-ui.ts` provide an EVE Planetary Interaction-inspired orbital workspace: charcoal panels, amber/turquoise node rings, dotted links, a restrained engineering header, a project folder panel and node-style message dividers. This is a terminal adaptation, not a graphical replica. The existing theme name is kept for compatibility. The startup diagram leaves this header, workspace and footer functionality intact.
 
 The footer shows `Tokens totaal` for usage recorded **since the last startup, session change or `/reload`**. The counter resets immediately to zero; only new entries then count, including assistant/tool usage, summaries and cache warming across branches. Tree navigation and toggling `/oom-footer` do not reset it. Tokens include input, output, cache-read and cache-write; repeated model context counts again. `*` marks missing/invalid usage. The footer does not calculate or display costs.
 

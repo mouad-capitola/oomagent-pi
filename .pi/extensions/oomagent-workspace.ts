@@ -3,7 +3,8 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { mkdirSync, writeFileSync, readFileSync, readdirSync, realpathSync, lstatSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { WorkspaceEditor, WorkspaceState, WelcomeScreen } from "../lib/workspace-ui.ts";
+import { isWorkspaceProject } from "../lib/project-presentation.mjs";
+import { WorkspaceEditor, WorkspaceState } from "../lib/workspace-ui.ts";
 import { projectFor, readDocument, safeLabel, TextBuffer } from "../lib/workspace-files.mjs";
 
 export default function workspace(pi: ExtensionAPI) {
@@ -12,7 +13,6 @@ export default function workspace(pi: ExtensionAPI) {
   let state: WorkspaceState | undefined;
   let current: ExtensionContext | undefined;
   let redraw: (() => void) | undefined;
-  let shown = false;
   let activating = false;
   let liveTimer: ReturnType<typeof setInterval> | undefined;
   let removePointerReset: (() => void) | undefined;
@@ -61,9 +61,12 @@ export default function workspace(pi: ExtensionAPI) {
   };
 
   const install = (ctx: ExtensionContext) => {
-    if (ctx.mode !== "tui" || !ctx.hasUI) return;
+    if (ctx.mode !== "tui" || !ctx.hasUI || !isWorkspaceProject(ctx.cwd)) return;
     current = ctx;
-    state ??= new WorkspaceState(root);
+    if (!state) {
+      state = new WorkspaceState(root);
+      state.visible = false; // Start in chat; /workspace or F2 opens the panels.
+    }
     try { state.rebuild(); } catch (error) { state.message = safeLabel(error instanceof Error ? error.message : "Projects niet bereikbaar."); }
     ctx.ui.setEditorComponent((tui, theme, keys) => {
       redraw = () => tui.requestRender();
@@ -84,19 +87,12 @@ export default function workspace(pi: ExtensionAPI) {
   // extension. Reattach without replacing its header/footer or losing our state.
   pi.events.on("oomagent:ui-ready", () => { if (current) install(current); });
 
-  pi.on("session_start", async (_event, ctx) => {
-    if (ctx.mode !== "tui" || !ctx.hasUI) return;
+  pi.on("session_start", (_event, ctx) => {
+    if (ctx.mode !== "tui" || !ctx.hasUI || !isWorkspaceProject(ctx.cwd)) return;
     install(ctx);
     try { activeProject = projectFor(root, ctx.cwd); } catch { activeProject = undefined; }
     poll();
     if (!liveTimer) { liveTimer = setInterval(poll, 1000); liveTimer.unref(); }
-    if (!shown) {
-      shown = true;
-      const ready = await ctx.ui.custom<boolean>((tui, theme, _keys, done) => new WelcomeScreen(tui, theme, done),
-        { overlay: true, overlayOptions: { width: "100%", maxHeight: "100%", anchor: "center" } });
-      if (state) state.visible = ready;
-      redraw?.();
-    }
   });
 
   pi.on("tool_execution_end", poll);
@@ -114,7 +110,11 @@ export default function workspace(pi: ExtensionAPI) {
   pi.registerCommand("workspace", {
     description: "Toon/verberg Projects en de bestandseditor (F2 wisselt focus)",
     handler: async (_args, ctx) => {
-      if (ctx.mode !== "tui") return;
+      if (ctx.mode !== "tui" || !ctx.hasUI) return;
+      if (!isWorkspaceProject(ctx.cwd)) {
+        ctx.ui.notify("De speciale werkplek is alleen beschikbaar in oomagent-pi.", "info");
+        return;
+      }
       if (!state) install(ctx);
       if (state) { state.visible = !state.visible; state.pane = "chat"; }
       resetPointer?.();

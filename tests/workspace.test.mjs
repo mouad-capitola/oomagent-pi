@@ -8,8 +8,8 @@ import { pathToFileURL } from "node:url";
 import { checkedPath, listFolder, readDocument, saveDocument, projectFor, TextBuffer, safeLabel, MAX_FILE_BYTES } from "../.pi/lib/workspace-files.mjs";
 
 // Test against the actual managed Pi host, not the older development peer copy.
-const release = readFileSync(join(homedir(), ".pi/agent/install/current-version"), "utf8").trim();
-const host = join(homedir(), ".pi/agent/install/releases", release, "node_modules/@earendil-works/pi-coding-agent");
+const host = process.env.PI_TEST_HOST ?? join(homedir(), ".pi/agent/install/releases",
+  readFileSync(join(homedir(), ".pi/agent/install/current-version"), "utf8").trim(), "node_modules/@earendil-works/pi-coding-agent");
 const requireHost = createRequire(join(host, "package.json"));
 const tuiUrl = pathToFileURL(requireHost.resolve("@earendil-works/pi-tui")).href;
 const codingUrl = pathToFileURL(join(host, "dist/index.js")).href;
@@ -31,6 +31,7 @@ const uiUrl = compile(readFileSync(new URL("../.pi/lib/workspace-ui.ts", import.
   .replace('"./workspace-changes.mjs"', JSON.stringify(changesUrl)));
 const { WorkspaceState, WorkspaceEditor, WelcomeScreen, dateArt } = await import(uiUrl);
 const entryUrl = compile(readFileSync(new URL("../.pi/extensions/oomagent-workspace.ts", import.meta.url), "utf8")
+  .replace('"../lib/project-presentation.mjs"', JSON.stringify(new URL("../.pi/lib/project-presentation.mjs", import.meta.url).href))
   .replace('"../lib/workspace-ui.ts"', JSON.stringify(uiUrl))
   .replace('"../lib/workspace-files.mjs"', JSON.stringify(modelUrl)));
 const { default: register } = await import(entryUrl);
@@ -162,6 +163,61 @@ test("welcome consumes ready locally and supports cancel and centered resize", (
   screen.handleInput("ready"); screen.handleInput("\r");
   assert.equal(ready, true);
   screen.handleInput("\x1b"); assert.equal(ready, false);
+});
+for (const reason of ["startup", "reload", "new", "resume", "fork"]) {
+  test(`TUI ${reason} opens chat without a welcome screen; workspace stays opt-in`, async t => {
+    const { root } = fixture(t);
+    const handlers = new Map(), commands = new Map(), events = new Map();
+    let state, editor;
+    t.mock.method(WorkspaceState.prototype, "rebuild", function () { state = this; });
+    const poll = t.mock.method(WorkspaceState.prototype, "poll", () => []);
+    const tui = { terminal: { rows: 40, columns: 100, write() {} }, requestRender() {}, addInputListener: () => () => {} };
+    const ctx = { mode: "tui", hasUI: true, cwd: new URL("../", import.meta.url).pathname, ui: {
+      theme,
+      setEditorComponent(factory) { editor = factory(tui, editorTheme, keys); },
+      custom() { assert.fail("Startup must not open a welcome overlay"); },
+    } };
+    register({
+      on: (name, fn) => handlers.set(name, fn),
+      events: { on: (name, fn) => events.set(name, fn) },
+      registerCommand: (name, command) => commands.set(name, command),
+    });
+    t.after(() => handlers.get("session_shutdown")());
+
+    await handlers.get("session_start")({ reason }, ctx);
+    assert.equal(state.visible, false);
+    assert.equal(state.pane, "chat");
+    assert.equal(poll.mock.callCount(), 0, "hidden workspace must not poll files");
+    assert.doesNotMatch(stripTerminalSequences(editor.render(100).join("\n")), /Actief:|F2: focus/);
+    editor.handleInput("chat draft");
+    assert.equal(editor.getText(), "chat draft");
+    assert.equal(handlers.get("before_agent_start")(), undefined);
+
+    await commands.get("workspace").handler("", ctx);
+    assert.equal(state.visible, true);
+    assert.equal(editor.getText(), "chat draft");
+    events.get("oomagent:ui-ready")();
+    assert.equal(state.visible, true, "branding must not hide a manually opened workspace");
+    await commands.get("workspace").handler("", ctx);
+    assert.equal(state.visible, false);
+    editor.handleInput("\x1bOQ"); // F2 remains an alternative way to open the workspace.
+    assert.equal(state.visible, true);
+    assert.equal(state.pane, "tree");
+  });
+}
+
+test("other projects never install workspace panels, even on command or UI-ready", async () => {
+  const handlers = {}, commands = {}, events = {};
+  register({ on: (name, fn) => handlers[name] = fn, events: { on: (name, fn) => events[name] = fn }, registerCommand: (name, options) => commands[name] = options.handler });
+  const ctx = { mode: "tui", hasUI: true, cwd: "/another-project", ui: {
+    setEditorComponent() { assert.fail("external editor replaced"); },
+    notify() {},
+  } };
+  await handlers.session_start({}, ctx);
+  events["oomagent:ui-ready"]();
+  await commands.workspace("", ctx);
+  assert.equal(handlers.before_agent_start(), undefined);
+  handlers.session_shutdown();
 });
 test("non-TUI sessions never install UI or start welcome screen", async () => {
   const handlers = new Map();

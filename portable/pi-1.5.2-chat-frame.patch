@@ -1,0 +1,401 @@
+diff --git a/packages/coding-agent/src/modes/interactive/chat-viewport.ts b/packages/coding-agent/src/modes/interactive/chat-viewport.ts
+index eff762a..b38ba15 100644
+--- a/packages/coding-agent/src/modes/interactive/chat-viewport.ts
++++ b/packages/coding-agent/src/modes/interactive/chat-viewport.ts
+@@ -1,7 +1,18 @@
+-import { type Component, ScrollView, type ScrollViewScrollbar, VStack } from "@earendil-works/pi-tui";
++import {
++	type Component,
++	Frame,
++	getTerminalColorMode,
++	rgbColor,
++	ScrollView,
++	type ScrollViewScrollbar,
++	styleText,
++	VStack,
++} from "@earendil-works/pi-tui";
+ 
+ export interface ChatViewportOptions {
+ 	readonly document: Component;
++	/** Fixed above the transcript in fullscreen mode. */
++	readonly header?: Component;
+ 	readonly pendingMessages: Component;
+ 	readonly status: Component;
+ 	readonly editor: Component;
+@@ -34,13 +45,27 @@ export function createChatViewport(options: ChatViewportOptions): ChatViewport {
+ 		...(options.widgetsAbove === undefined ? [] : [{ component: options.widgetsAbove, shrink: 1, minSize: 0 }]),
+ 		{ component: options.editor, shrink: 1, minSize: 3 },
+ 		...(options.widgetsBelow === undefined ? [] : [{ component: options.widgetsBelow, shrink: 1, minSize: 0 }]),
+-		{ component: options.footer, shrink: 1, minSize: 0 },
+ 	]);
+-	return {
+-		transcript,
+-		root: new VStack([
++	const chat = new Frame(
++		new VStack([
+ 			{ component: transcript, basis: 0, grow: 1, shrink: 1, minSize: 1 },
+ 			{ component: dock, basis: "auto", grow: 0, shrink: 1, minSize: 1 },
+ 		]),
++		"π",
++		(text) => styleText(text, { fg: rgbColor(0, 122, 204) }, getTerminalColorMode()),
++	);
++	const body = new VStack([
++		{ component: chat, basis: 0, grow: 1, shrink: 1, minSize: 1 },
++		{ component: options.footer, shrink: 1, minSize: 0 },
++	]);
++	return {
++		transcript,
++		root: options.header
++			? new VStack([
++					{ component: options.header, shrink: 1, minSize: 0 },
++					// Let a tall header shrink before sacrificing chat and editor space.
++					{ component: body, basis: 0, grow: 1, shrink: 0, minSize: 8 },
++				])
++			: body,
+ 	};
+ }
+diff --git a/packages/coding-agent/src/modes/interactive/interactive-mode.ts b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
+index d8e2390..bdea5ae 100644
+--- a/packages/coding-agent/src/modes/interactive/interactive-mode.ts
++++ b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
+@@ -1005,8 +1005,13 @@ export class InteractiveMode {
+ 
+ 		// Keep one component tree and remount it when changing renderers.
+ 		this.renderWidgets(); // Initialize with default spacer
++		// Keep the canonical document intact for regular mode and exit output.
++		const transcriptDocument = new Container();
++		transcriptDocument.addChild(this.loadedResourcesContainer);
++		transcriptDocument.addChild(this.chatContainer);
+ 		const viewport = createChatViewport({
+-			document: this.documentContainer,
++			document: transcriptDocument,
++			header: this.headerContainer,
+ 			pendingMessages: this.pendingMessagesContainer,
+ 			status: this.statusContainer,
+ 			widgetsAbove: this.widgetContainerAbove,
+diff --git a/packages/coding-agent/test/chat-viewport.test.ts b/packages/coding-agent/test/chat-viewport.test.ts
+index c87215d..26d55bd 100644
+--- a/packages/coding-agent/test/chat-viewport.test.ts
++++ b/packages/coding-agent/test/chat-viewport.test.ts
+@@ -1,8 +1,72 @@
+-import { Container } from "@earendil-works/pi-tui";
++import { Container, stripTerminalSequences, Text, visibleWidth } from "@earendil-works/pi-tui";
+ import { describe, expect, test } from "vitest";
++import { renderLayoutFrame } from "../../tui/src/layout.ts";
+ import { createChatViewport } from "../src/modes/interactive/chat-viewport.ts";
+ 
+ describe("chat viewport", () => {
++	test("keeps the header and dock fixed while scrolling and appending chat", () => {
++		const header = new Text("DATE\nFOLDERS", 0, 0);
++		const document = new Container();
++		for (let i = 0; i < 60; i++) document.addChild(new Text(`message ${i}`, 0, 0));
++		const viewport = createChatViewport({
++			header,
++			document,
++			pendingMessages: new Container(),
++			status: new Container(),
++			editor: new Text("EDITOR", 0, 0),
++			footer: new Text("FOOTER", 0, 0),
++		});
++		const render = () => renderLayoutFrame(viewport.root, 80, 24, () => {}).lines;
++		const bottom = render();
++		expect(bottom.slice(0, 2).map((line) => line.trim())).toEqual(["DATE", "FOLDERS"]);
++		expect(bottom.join("\n")).toContain("message 59");
++		const visible = bottom.map(stripTerminalSequences);
++		expect(visible[2]).toMatch(/^┌ π ─+┐$/);
++		expect(visible.at(-2)).toMatch(/^└─+┘$/);
++		expect(visible.at(-1)?.trim()).toBe("FOOTER");
++		for (const line of visible.slice(3, -2)) {
++			expect(line.startsWith("│")).toBe(true);
++			expect(line.endsWith("│")).toBe(true);
++		}
++		expect(visible.find((line) => line.includes("EDITOR"))).toMatch(/^│.*EDITOR.*│$/);
++		viewport.transcript.scrollToStart();
++		const top = render();
++		expect(top.slice(0, 2)).toEqual(bottom.slice(0, 2));
++		expect(top.slice(-2)).toEqual(bottom.slice(-2));
++		expect(top.join("\n")).toContain("message 0");
++		expect(top.join("\n")).not.toContain("message 59");
++		document.addChild(new Text("new message", 0, 0));
++		expect(render()).toEqual(top);
++		viewport.transcript.scrollToEnd();
++		expect(render().join("\n")).toContain("new message");
++		header.setText("NEW DATE\nNEW FOLDERS");
++		expect(render()[0]).toContain("NEW DATE");
++	});
++
++	test("shrinks a tall header on resize without losing the chat or dock", () => {
++		const viewport = createChatViewport({
++			header: new Text(["DATE", "FOLDERS", ...Array(30).fill("tree row")].join("\n"), 0, 0),
++			document: new Text("CHAT", 0, 0),
++			pendingMessages: new Container(),
++			status: new Container(),
++			editor: new Text("EDITOR", 0, 0),
++			footer: new Text("FOOTER", 0, 0),
++		});
++		for (const [width, height] of [
++			[100, 55],
++			[40, 24],
++			[20, 12],
++			[10, 8],
++			[100, 55],
++		]) {
++			const lines = renderLayoutFrame(viewport.root, width!, height!, () => {}).lines;
++			expect(lines).toHaveLength(height!);
++			expect(lines.every((line) => visibleWidth(line) <= width!)).toBe(true);
++			for (const label of ["CHAT", "EDITOR", "FOOTER"]) expect(lines.join("\n")).toContain(label);
++			if (height! >= 12) expect(lines[0]).toContain("DATE");
++		}
++	});
++
+ 	test("defaults the transcript scrollbar to auto and accepts overrides", () => {
+ 		const automatic = createChatViewport({
+ 			document: new Container(),
+diff --git a/packages/tui/src/index.ts b/packages/tui/src/index.ts
+index 8b4f9ea..d34942f 100644
+--- a/packages/tui/src/index.ts
++++ b/packages/tui/src/index.ts
+@@ -40,6 +40,7 @@ export {
+ export { Box } from "./components/box.ts";
+ export { CancellableLoader } from "./components/cancellable-loader.ts";
+ export { Editor, type EditorOptions, type EditorTheme } from "./components/editor.ts";
++export { Frame } from "./components/frame.ts";
+ export { HStack } from "./components/h-stack.ts";
+ export {
+ 	Image,
+diff --git a/packages/tui/src/layout-node.ts b/packages/tui/src/layout-node.ts
+index a3c06b2..94d39f9 100644
+--- a/packages/tui/src/layout-node.ts
++++ b/packages/tui/src/layout-node.ts
+@@ -39,7 +39,13 @@ export interface ScrollLayoutNode {
+ 	state: ScrollLayoutState;
+ }
+ 
+-export type LayoutNode = StackLayoutNode | ScrollLayoutNode;
++export interface FrameLayoutNode {
++	type: "frame";
++	component: Component;
++	renderBorder(width: number, height: number): string[];
++}
++
++export type LayoutNode = StackLayoutNode | ScrollLayoutNode | FrameLayoutNode;
+ 
+ export interface LayoutComponent extends Component {
+ 	[LAYOUT_NODE](): LayoutNode;
+diff --git a/packages/tui/src/layout.ts b/packages/tui/src/layout.ts
+index a64c262..a51909c 100644
+--- a/packages/tui/src/layout.ts
++++ b/packages/tui/src/layout.ts
+@@ -133,6 +133,38 @@ function layoutComponent(
+ 		};
+ 	}
+ 
++	if (node.type === "frame") {
++		// Keep the content usable when the terminal cannot fit a border plus one cell.
++		const inset = safeWidth >= 3 && (height === undefined || height >= 3) ? 1 : 0;
++		const allocatedHeight = height ?? measureHeight(context, node.component, safeWidth - inset * 2) + inset * 2;
++		const rect = { x, y, width: safeWidth, height: allocatedHeight };
++		const box: LayoutBox = {
++			component,
++			rect,
++			clip: intersect(clip, rect),
++			children: [],
++			// A blank backing also ensures wide glyphs are clipped in a one-column frame.
++			lines: inset ? node.renderBorder(safeWidth, allocatedHeight) : Array(allocatedHeight).fill(" "),
++			layer: 0,
++		};
++		const inner = { x: x + inset, y: y + inset, width: safeWidth - inset * 2, height: allocatedHeight - inset * 2 };
++		box.children.push(
++			withParent(
++				layoutComponent(
++					context,
++					node.component,
++					inner.x,
++					inner.y,
++					inner.width,
++					inner.height,
++					intersect(box.clip, inner),
++				),
++				box,
++			),
++		);
++		return box;
++	}
++
+ 	if (node.type === "scroll") {
+ 		const previousScrollTop = node.state.scrollTop;
+ 		const contentWidth = node.state.getContentWidth(safeWidth);
+@@ -372,6 +404,15 @@ function paintBox(box: LayoutBox, screen: string[], totalWidth: number): void {
+ 				const visibleRows = Math.min(box.rect.height, metadata.rows - hiddenRows);
+ 				const cropped = cropKittyImageLine(imageLine, hiddenRows, visibleRows);
+ 				if (box.rect.x === 0 && box.rect.width >= totalWidth) screen[box.rect.y] = cropped;
++				else {
++					screen[box.rect.y] = compositeTuiLine(
++						screen[box.rect.y] ?? "",
++						cropped,
++						box.rect.x,
++						box.rect.width,
++						totalWidth,
++					);
++				}
+ 			}
+ 			break;
+ 		}
+diff --git a/packages/tui/src/components/frame.ts b/packages/tui/src/components/frame.ts
+new file mode 100644
+index 0000000..f998da4
+--- /dev/null
++++ b/packages/tui/src/components/frame.ts
+@@ -0,0 +1,50 @@
++import { type FrameLayoutNode, LAYOUT_NODE } from "../layout-node.ts";
++import { type Component, compositeTuiLine } from "../tui.ts";
++import { truncateToWidth, visibleWidth } from "../utils.ts";
++
++/** A one-cell border that preserves its child's fullscreen layout and hit targets. */
++export class Frame implements Component {
++	readonly child: Component;
++	readonly title: string;
++	readonly borderStyle: (text: string) => string;
++
++	constructor(child: Component, title: string, borderStyle: (text: string) => string) {
++		this.child = child;
++		this.title = title;
++		this.borderStyle = borderStyle;
++	}
++
++	invalidate(): void {
++		this.child.invalidate?.();
++	}
++
++	renderBorder(width: number, height: number): string[] {
++		const label = truncateToWidth(` ${this.title} `, width - 2, "");
++		return [
++			this.borderStyle(`┌${label}${"─".repeat(Math.max(0, width - 2 - visibleWidth(label)))}┐`),
++			...Array.from(
++				{ length: Math.max(0, height - 2) },
++				() => `${this.borderStyle("│")}${" ".repeat(width - 2)}${this.borderStyle("│")}`,
++			),
++			this.borderStyle(`└${"─".repeat(width - 2)}┘`),
++		];
++	}
++
++	render(width: number): string[] {
++		if (width < 3) return this.child.render(width).map((line) => truncateToWidth(line, width, ""));
++		const content = this.child.render(width - 2);
++		const lines = this.renderBorder(width, content.length + 2);
++		for (let row = 0; row < content.length; row++) {
++			lines[row + 1] = compositeTuiLine(lines[row + 1]!, content[row]!, 1, width - 2, width);
++		}
++		return lines;
++	}
++
++	[LAYOUT_NODE](): FrameLayoutNode {
++		return {
++			type: "frame",
++			component: this.child,
++			renderBorder: (width, height) => this.renderBorder(width, height),
++		};
++	}
++}
+diff --git a/packages/tui/test/frame.test.ts b/packages/tui/test/frame.test.ts
+new file mode 100644
+index 0000000..6b13df4
+--- /dev/null
++++ b/packages/tui/test/frame.test.ts
+@@ -0,0 +1,96 @@
++import assert from "node:assert/strict";
++import { describe, it } from "node:test";
++import { Frame } from "../src/components/frame.ts";
++import { ScrollView } from "../src/components/scroll-view.ts";
++import { Text } from "../src/components/text.ts";
++import { getLayoutBoxesAt, getScrollViewBox, getScrollViewsAt, renderLayoutFrame } from "../src/layout.ts";
++import { encodeKitty, registerKittyImageMetadata } from "../src/terminal-image.ts";
++import { CURSOR_MARKER } from "../src/tui.ts";
++import { stripTerminalSequences, visibleWidth } from "../src/utils.ts";
++
++const blue = (text: string) => `\x1b[34m${text}\x1b[39m`;
++
++describe("Frame", () => {
++	it("draws a titled border and keeps content and cursor inside it", () => {
++		const content = new Text(`hi${CURSOR_MARKER}`, 0, 0);
++		const frame = new Frame(content, "π", blue);
++		const result = renderLayoutFrame(frame, 8, 4, () => {});
++		assert.deepEqual(result.lines.map(stripTerminalSequences), ["┌ π ───┐", "│hi    │", "│      │", "└──────┘"]);
++		assert.ok(result.lines[0]!.includes("\x1b[34m"));
++		assert.ok(result.lines[1]!.includes(CURSOR_MARKER));
++		assert.equal(getLayoutBoxesAt(result, 1, 1)[0]!.component, content);
++		assert.equal(getLayoutBoxesAt(result, 0, 1)[0]!.component, frame);
++	});
++
++	it("keeps the frame fixed when scrolling and reserves the scrollbar inside it", () => {
++		const scroll = new ScrollView(new Text("one\ntwo\nthree\nfour\nfive", 0, 0), {
++			follow: "end",
++			primary: true,
++			scrollbar: "always",
++		});
++		const frame = new Frame(scroll, "π", blue);
++		const render = () => renderLayoutFrame(frame, 12, 5, () => {});
++		const bottom = render();
++		assert.equal(bottom.primaryScrollView, scroll);
++		assert.deepEqual(getScrollViewBox(bottom, scroll)!.rect, { x: 1, y: 1, width: 10, height: 3 });
++		assert.deepEqual(getScrollViewsAt(bottom, 2, 2), [scroll]);
++		assert.deepEqual(getScrollViewsAt(bottom, 0, 2), []);
++		assert.ok(bottom.lines.join("\n").includes("five"));
++		scroll.scrollToStart();
++		const top = render();
++		assert.equal(top.lines[0], bottom.lines[0]);
++		assert.equal(top.lines[4], bottom.lines[4]);
++		assert.ok(top.lines.join("\n").includes("one"));
++		for (const line of top.lines.slice(1, -1)) {
++			assert.ok(stripTerminalSequences(line).startsWith("│"));
++			assert.ok(stripTerminalSequences(line).endsWith("│"));
++		}
++	});
++
++	it("handles empty content, unicode, narrow widths, resize and tiny heights", () => {
++		for (const text of ["", "界🙂é long line"]) {
++			const frame = new Frame(new Text(text, 0, 0), "π 界🙂", blue);
++			for (const width of [30, 3, 2, 1, 30]) {
++				for (const height of [8, 3, 2, 1]) {
++					const result = renderLayoutFrame(frame, width, height, () => {});
++					assert.equal(result.lines.length, height);
++					assert.ok(
++						result.lines.every((line) => visibleWidth(line) <= width),
++						JSON.stringify({ text, width, height, lines: result.lines }),
++					);
++				}
++			}
++		}
++	});
++
++	it("keeps partially scrolled images inside the border", () => {
++		const imageId = 125;
++		const imageLine = encodeKitty("AAAA", { columns: 2, rows: 3, imageId, moveCursor: false });
++		registerKittyImageMetadata({ imageId, columns: 2, rows: 3, widthPx: 100, heightPx: 90 });
++		const scroll = new ScrollView({ render: () => [imageLine, "", "", "after"], invalidate() {} });
++		const frame = new Frame(scroll, "π", blue);
++		renderLayoutFrame(frame, 20, 4, () => {});
++		scroll.scrollBy(1);
++		const result = renderLayoutFrame(frame, 20, 4, () => {});
++		assert.ok(result.lines[1]!.includes("y=30,h=60,r=2"));
++		assert.ok(stripTerminalSequences(result.lines[1]!).startsWith("│"));
++		assert.ok(stripTerminalSequences(result.lines[1]!).endsWith("│"));
++	});
++
++	it("supports intrinsic rendering and propagates invalidation", () => {
++		let invalidated = false;
++		const frame = new Frame(
++			{
++				render: () => ["hello"],
++				invalidate: () => {
++					invalidated = true;
++				},
++			},
++			"π",
++			blue,
++		);
++		assert.deepEqual(frame.render(9).map(stripTerminalSequences), ["┌ π ────┐", "│hello  │", "└───────┘"]);
++		frame.invalidate();
++		assert.equal(invalidated, true);
++	});
++});

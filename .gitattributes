@@ -1,0 +1,6 @@
+*.sh text eol=lf
+/pi text eol=lf
+/tuios text eol=lf
+/tools text eol=lf
+# Unified-diff context has a mandatory leading space, including on blank lines.
+*.patch text eol=lf -whitespace

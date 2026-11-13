@@ -6,3 +6,8 @@ node_modules
 *.env
 *.env.*
 !/.env.example
+
+# Portable installation, caches and private runtime state (never publish).
+/.portable/
+/portable/python/.venv/
+__pycache__/

@@ -1,0 +1,48 @@
+name: Portable Pi and TUIOS
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'portable/**'
+      - '.pi/**'
+      - 'setup.sh'
+      - 'pi'
+      - 'tuios'
+      - 'tools'
+      - 'tests/**'
+      - '.github/workflows/portable.yml'
+permissions:
+  contents: read
+jobs:
+  ubuntu:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install pinned Pi, TUIOS and tools
+        run: bash setup.sh
+      - name: Configuration and tool regression tests
+        run: |
+          ./tools node --test tests/portable.test.mjs tests/document-portable.test.mjs tests/web-search.test.mjs tests/mcp-config.test.mjs tests/playwright-mcp.test.mjs
+          ./tools python3 tests/document-portable.py
+      - name: Pi frame regression tests
+        run: |
+          ./tools bash -c 'cd .portable/pi-source/packages/tui && node --test test/frame.test.ts'
+          ./tools bash -c 'cd .portable/pi-source/packages/coding-agent && node ../../node_modules/vitest/dist/cli.js --run test/chat-viewport.test.ts'
+          ./tools env PI_TEST_RUNTIME_DIST="$PWD/.portable/pi-source/packages/coding-agent/dist" node --test tests/terminal-frames.test.ts
+      - name: MCP connections and synthetic tool calls (no scan or inference)
+        run: |
+          ./tools doctor --mcp
+          ./tools python3 tests/portable-mcp.py
+      - name: Real Pi and TUIOS terminals (offline, no credentials)
+        run: |
+          export PI_TEST_CLI="$PWD/.portable/pi-source/packages/coding-agent/dist/cli.js"
+          ./tools python3 tests/project-presentation-terminal.py fullscreen
+          ./tools python3 tests/project-presentation-terminal.py regular
+          ./tools python3 tests/tuios-terminal.py
+      - name: Stop test ZAP
+        if: always()
+        run: ./tools zap stop

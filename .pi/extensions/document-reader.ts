@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { stat, realpath } from "node:fs/promises";
 import { extname, isAbsolute, relative, resolve, sep, win32 } from "node:path";
+import { fileURLToPath } from "node:url";
 import { Type } from "@earendil-works/pi-ai";
 import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
@@ -40,7 +41,7 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool(defineTool({
     name: "document_reader",
     label: "Document reader",
-    description: "Extract text from project-relative .docx and .pdf files on macOS, using system textutil and Swift/PDFKit (no npm packages). Maximum 20 MiB input; PDF extraction limited to 200 pages/200,000 characters. Returns text and metadata, not formatting or images. Scanned PDFs need OCR and locked PDFs are not supported. Blocks traversal and outside-project symlinks. May require installed Apple command-line developer tools for Swift.",
+    description: "Extract text from project-relative .docx and .pdf files. Uses system textutil/PDFKit on macOS and the portable Python tools on Linux/WSL. Maximum 20 MiB input; PDF extraction limited to 200 pages/200,000 characters. Returns text and metadata, not formatting or images. Scanned PDFs need OCR and locked PDFs are not supported. Blocks traversal and outside-project symlinks. May require installed Apple command-line developer tools for Swift.",
     parameters: Type.Object({
       file_path: Type.String({ minLength: 1, description: "Project-relative .docx or .pdf path" }),
       max_characters: Type.Optional(Type.Integer({ minimum: 100, maximum: 100000, description: "Maximum returned characters; default 20000" })),
@@ -65,12 +66,20 @@ export default function (pi: ExtensionAPI) {
         if (info.size > MAX_BYTES) throw new Error("Document exceeds the 20 MiB size limit.");
         const format = extname(file_path).toLowerCase();
         if (format !== ".docx" && format !== ".pdf") throw new Error("Only .docx and .pdf documents are supported.");
-        if (process.platform !== "darwin") throw new Error("This reader requires macOS system tools (textutil and PDFKit).");
         const options = { cwd: root, signal, timeout: 60000, maxBuffer: 2 * 1024 * 1024 };
         let text: string;
         let pageCount: number | undefined;
         let extractionTruncated = false;
-        if (format === ".docx") {
+        if (process.platform !== "darwin") {
+          const python = fileURLToPath(new URL("../../.portable/python/bin/python", import.meta.url));
+          const script = fileURLToPath(new URL("../../portable/document-text.py", import.meta.url));
+          const result = await execFileAsync(python, [script, path], options);
+          const parsed = JSON.parse(result.stdout) as PdfResult;
+          if (typeof parsed.text !== "string") throw new Error("Unexpected document extraction output.");
+          text = parsed.text;
+          pageCount = parsed.pageCount ?? undefined;
+          extractionTruncated = parsed.extractionTruncated;
+        } else if (format === ".docx") {
           const result = await execFileAsync("/usr/bin/textutil", ["-convert", "txt", "-stdout", "-encoding", "UTF-8", "-noload", "-nostore", path], options);
           text = result.stdout;
         } else {

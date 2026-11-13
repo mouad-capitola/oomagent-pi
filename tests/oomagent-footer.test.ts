@@ -18,6 +18,7 @@ const source = (await readFile(new URL("../.pi/extensions/oomagent-ui.ts", impor
   .replace('"../lib/codemode-frame.ts"', JSON.stringify(new URL("../.pi/lib/codemode-frame.ts", import.meta.url).href))
   .replace('"../lib/footer-limits.ts"', JSON.stringify(new URL("../.pi/lib/footer-limits.ts", import.meta.url).href))
   .replace('"../lib/footer-metrics.ts"', JSON.stringify(new URL("../.pi/lib/footer-metrics.ts", import.meta.url).href))
+  .replace('"../lib/project-presentation.mjs"', JSON.stringify(new URL("../.pi/lib/project-presentation.mjs", import.meta.url).href))
   .replace('"@earendil-works/pi-tui"', JSON.stringify(tuiUrl))
   .replaceAll("import.meta.url", JSON.stringify(new URL("../.pi/extensions/oomagent-ui.ts", import.meta.url).href));
 const load = text => import(`data:text/javascript;base64,${Buffer.from(stripTypeScriptTypes(text)).toString("base64")}`);
@@ -358,6 +359,36 @@ await test("Git stats read local changes and upstream counts without fetching", 
   await assert.rejects(readFooterGitStatus(root));
 });
 
+await test("quiet startup hides the custom header on startup, new and reload, with explicit opt-in", async () => {
+  const handlers = new Map(), commands = new Map();
+  let headerFactory, editorFactory, footerFactory;
+  const ctx = { mode: "tui", hasUI: true, cwd: fileURLToPath(new URL("../", import.meta.url)), ui: {
+    theme: { fg: (_color, text) => text, bg: (_color, text) => text, bold: text => text },
+    setFooter: factory => { footerFactory = factory; },
+    setEditorComponent: factory => { editorFactory = factory; },
+    setHeader: factory => { headerFactory = factory; },
+    setTitle() {}, setWidget() {}, setTheme: () => ({ success: true }),
+  } };
+  register({
+    getSettings: () => ({ quietStartup: true }),
+    on: (name, handler) => handlers.set(name, handler),
+    registerCommand: (name, command) => commands.set(name, command),
+    registerMarkdownTransformer() {},
+  });
+  try {
+    for (const reason of ["startup", "new", "reload"]) {
+      handlers.get("session_start")({ reason }, ctx);
+      const header = headerFactory({ requestRender() {} });
+      assert.equal(typeof footerFactory, "function");
+      assert.equal(typeof editorFactory, "function");
+      for (const width of [0, 1, 30, 80, 120]) assert.deepEqual(header.render(width), []);
+      await commands.get("oom-screen").handler("", ctx);
+      assert.match(header.render(120).join("\n"), /ORBITAL NETWORK/);
+      handlers.get("session_shutdown")();
+    }
+  } finally { handlers.get("session_shutdown")(); }
+});
+
 await test("orbital header and message dividers fit narrow terminals and follow theme changes", () => {
   const handlers = new Map();
   const commands = new Map();
@@ -366,7 +397,7 @@ await test("orbital header and message dividers fit narrow terminals and follow 
   let selectedTheme;
   let editorFactory;
   const ctx = {
-    mode: "tui", hasUI: true,
+    mode: "tui", hasUI: true, cwd: fileURLToPath(new URL("../", import.meta.url)),
     ui: {
       theme: { fg: (_color, text) => text, bg: (_color, text) => text, bold: text => text },
       setFooter() {}, setTitle() {}, setEditorComponent: factory => { editorFactory = factory; },
@@ -383,6 +414,7 @@ await test("orbital header and message dividers fit narrow terminals and follow 
   });
   handlers.get("session_start")({}, ctx);
   const header = headerFactory({ requestRender() {} });
+  void commands.get("oom-tree").handler("", ctx); // Test the orbital panel without the separate tree.
   try {
     assert.equal(selectedTheme, "oomagent-swiss");
     assert.equal(header.render(100).length, 4, "compact orbital panel is shown by default");
@@ -515,7 +547,7 @@ await test("project panel fits emoji, ANSI, resize, empty, loading and error sta
 });
 
 await test("header loads a real project panel and toggles it without changing the footer", async () => {
-  const root = await mkdtemp(join(tmpdir(), "oomagent-panel-"));
+  const root = fileURLToPath(new URL("../", import.meta.url));
   const handlers = new Map();
   const commands = new Map();
   let factory;
@@ -538,20 +570,19 @@ await test("header loads a real project panel and toggles it without changing th
   };
   let header;
   try {
-    await writeFile(join(root, "README.md"), "");
     handlers.get("session_start")({}, ctx);
     const initialFooter = footer;
     header = factory({ requestRender: () => redraws++ });
     assert.match(header.render(120).join("\n"), /Structuur laden/);
-    for (let i = 0; i < 50 && !header.render(120).join("\n").includes("README.md"); i++) {
+    for (let i = 0; i < 50 && !header.render(120).join("\n").includes("📁 .pi"); i++) {
       await new Promise(resolve => setTimeout(resolve, 10));
     }
-    assert.match(header.render(120).join("\n"), /📄 README.md/);
+    assert.match(header.render(120).join("\n"), /📁 \.pi/);
     await commands.get("oom-tree").handler("", ctx);
     assert.equal(header.render(120).length, 4);
-    assert.doesNotMatch(header.render(120).join("\n"), /README.md/);
+    assert.doesNotMatch(header.render(120).join("\n"), /📁 \.pi/);
     await commands.get("oom-tree").handler("", ctx);
-    assert.match(header.render(120).join("\n"), /README.md/);
+    assert.match(header.render(120).join("\n"), /📁 \.pi/);
     assert.equal(footer, initialFooter);
     assert.ok(redraws > 0);
     header.dispose();
@@ -562,7 +593,6 @@ await test("header loads a real project panel and toggles it without changing th
   } finally {
     header?.dispose();
     handlers.get("session_shutdown")();
-    await rm(root, { recursive: true, force: true });
   }
 });
 

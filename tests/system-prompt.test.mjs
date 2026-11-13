@@ -33,10 +33,11 @@ test("loaded append prompt includes conversational guidance without removing tas
   assert.match(text, /Do not commit, push, deploy or run destructive commands without explicit authorization/);
 });
 
-test("always-loaded prompt stays compact and tool descriptions remain lazy", async () => {
+test("always-loaded prompt stays compact without hiding direct tools behind codemode", async () => {
   const text = await readFile(new URL("../.pi/system-prompt.md", import.meta.url), "utf8");
   assert.ok(text.length <= 3500, `Prompt has ${text.length} characters; budget is 3500, not a provider-token guarantee`);
   const settings = JSON.parse(await readFile(new URL("../.pi/settings.json", import.meta.url), "utf8"));
-  assert.equal(settings.codemode.mode, "only");
-  assert.equal(settings.codemode.inlineBudget, 0);
+  assert.equal(settings.codemode.mode, "on");
+  assert.ok(settings.extensions.includes("-builtin:codemode"));
+  for (const name of ["read", "edit", "write", "bash", "tool_search"]) assert.ok(settings.defaultTools.includes(name));
 });

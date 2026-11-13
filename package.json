@@ -11,6 +11,7 @@
     "extensions": [
       "./.pi/extensions/oomagent-tools.ts",
       "./.pi/extensions/oomagent-ui.ts",
+      "./.pi/extensions/oomagent-start.ts",
       "./.pi/extensions/oomagent-context.ts",
       "./.pi/extensions/ci-status.ts",
       "./.pi/extensions/pi-inventory.ts"
