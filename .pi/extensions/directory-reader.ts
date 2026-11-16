@@ -13,6 +13,7 @@ type Entry = { path: string; type: "directory" | "file" | "symlink" | "other" };
 export default function (pi: ExtensionAPI) {
   pi.registerTool(defineTool({
     name: "directory_reader",
+    exposure: "deferred",
     label: "Directory reader",
     description: "List a project-relative directory and all subdirectories, including hidden entries. Use directory_path '.' for the project root (Pi's working directory). Returns project-relative paths and entry types, not file contents. Symlinks are listed but never followed. Large text output is shortened; details retains the complete listing.",
     parameters: Type.Object({

@@ -18,7 +18,9 @@ function checkSnapshot(root, revision, base) {
     // Test an isolated snapshot, never the unstaged working tree.
     const archive = join(temp, "snapshot.tar");
     execFileSync("git", ["archive", "--format=tar", "--output", archive, revision], { cwd: root, timeout: 30_000 });
-    execFileSync("tar", ["-xf", archive, "-C", temp], { timeout: 30_000 });
+    // Git Bash's GNU tar treats a Windows drive letter as a remote host.
+    const tar = process.platform === "win32" ? join(process.env.SystemRoot ?? "C:\\Windows", "System32", "tar.exe") : "tar";
+    execFileSync(tar, ["-xf", archive, "-C", temp], { timeout: 30_000 });
     rmSync(archive);
     const tests = join(temp, "tests");
     if (!existsSync(tests)) throw new Error("Geen tests in de gecontroleerde snapshot.");
@@ -27,7 +29,7 @@ function checkSnapshot(root, revision, base) {
     // Reuse installed dependencies without installing or changing packages.
     // Dependency versions are NOT independently verified by this gate.
     if (existsSync(join(temp, "node_modules"))) throw new Error("Snapshot bevat node_modules; controle gestopt.");
-    if (existsSync(join(root, "node_modules"))) symlinkSync(join(root, "node_modules"), join(temp, "node_modules"), "dir");
+    if (existsSync(join(root, "node_modules"))) symlinkSync(join(root, "node_modules"), join(temp, "node_modules"), process.platform === "win32" ? "junction" : "dir");
     console.log("\nOomAgent controle: " + revision);
     execFileSync("git", ["diff", "--check", base, revision], { cwd: root, stdio: "inherit", timeout: 30_000 });
     execFileSync(process.execPath, ["--test", ...testFiles.map(name => join("tests", name))], {

@@ -8,7 +8,7 @@ import { readFile } from "node:fs/promises";
 const deps = { stripVTControlCharacters };
 globalThis.__ciStatusTest = deps;
 const source = (await readFile(new URL("../.pi/extensions/ci-status.ts", import.meta.url), "utf8"))
-  .replace(/^import .*;\n/gm, "")
+  .replace(/^import .*;\r?\n/gm, "")
   .replace("const execFileAsync = promisify(execFile);", "");
 const prelude = `
 const deps = globalThis.__ciStatusTest;

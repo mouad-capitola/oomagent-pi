@@ -34,7 +34,7 @@ test("tracks nested active-project edits, additions, deletion, atomic saves and 
   mkdirSync(join(project, "nested"));
   writeFileSync(join(project, "nested/new.ts"), "new");
   events = tracker.poll(scopes);
-  assert.ok(events.some(e => e.path.endsWith("nested/new.ts") && e.kind === "nieuw"));
+  assert.ok(events.some(e => e.path === join(project, "nested", "new.ts") && e.kind === "nieuw"));
   rmSync(file);
   events = tracker.poll(scopes);
   assert.equal(events.find(e => e.path === file).kind, "verwijderd");
@@ -55,7 +55,7 @@ test("does not traverse symlinks, secrets, generated folders or other unopened p
   writeFileSync(join(project, ".env.local"), "fixture only");
   mkdirSync(join(project, "node_modules"));
   writeFileSync(join(project, "node_modules/package.js"), "ignored");
-  symlinkSync(join(root, "other"), join(project, "link"));
+  symlinkSync(join(root, "other"), join(project, "link"), process.platform === "win32" ? "junction" : "dir");
   tracker.poll(scopes);
   assert.ok(!tracker.snapshot.has(join(root, "other/hidden.txt")));
   assert.ok(!tracker.snapshot.has(join(project, ".env.local")));

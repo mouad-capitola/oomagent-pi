@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
-import { readFile, realpath } from "node:fs/promises";
+import { readFile, lstat } from "node:fs/promises";
 import { test } from "node:test";
 
 test("loaded append prompt includes conversational guidance without removing task safeguards", async () => {
   const append = new URL("../.pi/APPEND_SYSTEM.md", import.meta.url);
   const source = new URL("../.pi/system-prompt.md", import.meta.url);
-  assert.equal(await realpath(append), await realpath(source));
-  const text = await readFile(append, "utf8");
+  assert.equal((await lstat(append)).isFile(), true, "the append prompt works without OS symlink privileges");
+  const text = (await readFile(append, "utf8")).replace(/\r\n/g, "\n");
+  assert.equal(text, (await readFile(source, "utf8")).replace(/\r\n/g, "\n"), "both prompt copies must retain identical instructions");
   assert.match(text, /## Conversation/);
   assert.match(text, /relaxed, friendly tone like a beste vriend/);
   assert.match(text, /Whatssup, beste vriend!/);
@@ -33,11 +34,13 @@ test("loaded append prompt includes conversational guidance without removing tas
   assert.match(text, /Do not commit, push, deploy or run destructive commands without explicit authorization/);
 });
 
-test("always-loaded prompt stays compact without hiding direct tools behind codemode", async () => {
+test("always-loaded prompt stays compact with native lazy tool discovery, not codemode", async () => {
   const text = await readFile(new URL("../.pi/system-prompt.md", import.meta.url), "utf8");
   assert.ok(text.length <= 3500, `Prompt has ${text.length} characters; budget is 3500, not a provider-token guarantee`);
   const settings = JSON.parse(await readFile(new URL("../.pi/settings.json", import.meta.url), "utf8"));
   assert.equal(settings.codemode.mode, "on");
   assert.ok(settings.extensions.includes("-builtin:codemode"));
-  for (const name of ["read", "edit", "write", "bash", "tool_search"]) assert.ok(settings.defaultTools.includes(name));
+  assert.deepEqual(settings.defaultTools, ["tool_search"]);
+  const pkg = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
+  assert.ok(pkg.pi.extensions.includes("./.pi/extensions/lazy-tools.ts"));
 });

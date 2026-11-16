@@ -8,7 +8,7 @@ import { isWorkspaceProject, presentationRoot } from "../.pi/lib/project-present
 test("workspace UI is restricted to the exact repository, including its aliases", t => {
   const temp = mkdtempSync(join(tmpdir(), "presentation-"));
   t.after(() => rmSync(temp, { recursive: true, force: true }));
-  symlinkSync(presentationRoot, join(temp, "alias"));
+  symlinkSync(presentationRoot, join(temp, "alias"), process.platform === "win32" ? "junction" : "dir");
   assert.equal(isWorkspaceProject(presentationRoot), true);
   assert.equal(isWorkspaceProject(join(temp, "alias")), true);
   for (const path of [temp, join(presentationRoot, ".pi"), presentationRoot + "-other", "/missing-presentation-root"]) {

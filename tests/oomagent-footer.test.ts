@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { createRequire, stripTypeScriptTypes } from "node:module";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { directoryLinkType, fileSymlinkSkip } from "./helpers/symlinks.mjs";
 
 // Resolve the host-supplied peer from Pi's dependency tree.
 const require = createRequire(import.meta.resolve("@earendil-works/pi-coding-agent"));
@@ -347,7 +348,8 @@ await test("Git stats read local changes and upstream counts without fetching", 
     await writeFile(join(root, "tracked.txt"), "staged\n");
     await git("add", ".");
     await writeFile(join(root, "tracked.txt"), "also unstaged\n");
-    await writeFile(join(root, "new\nfile.txt"), "new\n");
+    // Windows rejects newlines in filenames; the parser fixture above still covers them.
+    await writeFile(join(root, process.platform === "win32" ? "new-file.txt" : "new\nfile.txt"), "new\n");
     assert.deepEqual(await readFooterGitStatus(root), {
       branch: "main", changed: 2, staged: 1, untracked: 1, conflicts: 0, ahead: 1, behind: 0,
     });
@@ -503,11 +505,10 @@ await test("project tree reads names only, bounds depth and hides sensitive/nois
       await mkdir(join(root, name));
       await writeFile(join(root, name, "hidden.txt"), "");
     }
-    for (const name of [".env", ".env.local", "bad\x1b[31m.txt", "日本語.txt"]) {
+    for (const name of [".env", ".env.local", process.platform === "win32" ? "bad\u202e[31m.txt" : "bad\x1b[31m.txt", "日本語.txt"]) {
       await writeFile(join(root, name), "");
     }
-    await symlink(join(root, "src"), join(root, "linked"), "dir");
-    await symlink(join(root, "README.md"), join(root, "linked-file"));
+    await symlink(join(root, "src"), join(root, "linked"), directoryLinkType);
     const entries = await readProjectTree(root);
     const text = entries.map(entry => entry.text).join("\n");
     assert.match(text, /📁 src/);
@@ -523,6 +524,15 @@ await test("project tree reads names only, bounds depth and hides sensitive/nois
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+await test("project tree omits file symlinks", { skip: fileSymlinkSkip }, async () => {
+  const root = await mkdtemp(join(tmpdir(), "oomagent-tree-links-"));
+  try {
+    await writeFile(join(root, "README.md"), "not read");
+    await symlink(join(root, "README.md"), join(root, "linked-file"));
+    assert.doesNotMatch((await readProjectTree(root)).map(entry => entry.text).join("\n"), /linked-file/);
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 await test("project panel fits emoji, ANSI, resize, empty, loading and error states", () => {

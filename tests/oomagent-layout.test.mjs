@@ -232,10 +232,16 @@ test("preview selects Pi's terminal capability detection rather than forced RGB"
     import { getTerminalColorMode } from '@earendil-works/pi-tui';
     console.log(getTerminalColorMode());
   `;
-  for (const [termProgram, expected] of [["Apple_Terminal", "256color"], ["iTerm.app", "truecolor"]]) {
+  for (const [termProgram, override, expected] of [
+    ["Apple_Terminal", undefined, process.platform === "win32" ? "truecolor" : "256color"],
+    ["iTerm.app", undefined, "truecolor"],
+    ["iTerm.app", "0", "256color"],
+    ["Apple_Terminal", "1", "truecolor"],
+  ]) {
     const result = spawnSync(process.execPath, ["--input-type=module", "-e", script], {
       cwd: fileURLToPath(new URL("../", import.meta.url)), encoding: "utf8", timeout: 10000,
-      env: { PATH: process.env.PATH, TERM: "xterm-256color", TERM_PROGRAM: termProgram, PI_IMAGE_PROTOCOL: "none" },
+      env: { PATH: process.env.PATH, TERM: "xterm-256color", TERM_PROGRAM: termProgram, PI_IMAGE_PROTOCOL: "none",
+        ...(override === undefined ? {} : { PI_TRUE_COLOR: override }) },
     });
     assert.equal(result.status, 0);
     assert.equal(result.stdout.trim(), expected);

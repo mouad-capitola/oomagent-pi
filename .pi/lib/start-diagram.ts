@@ -2,12 +2,15 @@ import { lstat, readdir, realpath } from "node:fs/promises";
 import { basename, join, relative, sep } from "node:path";
 import { stripVTControlCharacters } from "node:util";
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { parseColor, ScrollView, truncateToWidth, visibleWidth, wrapTextWithAnsi, type TUI } from "@earendil-works/pi-tui";
+import { getCellDimensions, parseColor, ScrollView, truncateToWidth, visibleWidth, wrapTextWithAnsi, type TUI } from "@earendil-works/pi-tui";
 import { safeLabel } from "./workspace-files.mjs";
 
 export type TreeNode = { name: string; kind: "folder" | "file" | "link" | "other"; note?: string; children?: TreeNode[] };
 export const POLICY = "OomAgent-selectie · max. 12 niveaus · symlinks niet gevolgd";
-const importantRoots = new Set([".pi", "skills", "flows", "workflows", "scripts", "docs", "AGENTS.md", "README.md", "package.json"]);
+const importantRoots = new Set([
+  ".pi", ".serena", ".githooks", "skills", "flows", "workflows", "scripts", "docs", "tests", "demos", "prototypes",
+  "AGENTS.md", "README.md", "package.json",
+]);
 const hiddenNoise = new Set([".git", "node_modules", "npm", ".DS_Store", "__pycache__", ".cache", "dist", "coverage"]);
 const priority = ["skills", "flows", "workflows", "extensions", "prompts", "lib", "themes"];
 
@@ -52,7 +55,7 @@ export const center = (text: string, width: number) => {
   return " ".repeat(Math.max(0, Math.floor((width - visibleWidth(clipped)) / 2))) + clipped;
 };
 type Column = { heading: string; nodes: TreeNode[] };
-type Diagram = { columns: Column[]; parent?: string };
+type Diagram = { columns: Column[]; parent?: string; overview?: boolean };
 
 export function diagrams(root: TreeNode, width: number): Diagram[] {
   const config = root.children?.find(node => node.name === ".pi" && node.children?.length);
@@ -68,6 +71,12 @@ export function diagrams(root: TreeNode, width: number): Diagram[] {
       parent: group.parent, columns: columns.slice(i * count, (i + 1) * count),
     }));
   });
+  const folders = (root.children ?? []).filter(node => node.kind === "folder");
+  // Expand the whole selected tree on the overview; retain the focused detail pages.
+  if (folders.length > 1) return [
+    { overview: true, columns: (root.children ?? []).map(node => ({ heading: label(node), nodes: node.children ?? [] })) },
+    ...pages,
+  ];
   return pages.length ? pages : [{ columns: [{ heading: root.note ?? "leeg", nodes: [] }] }];
 }
 
@@ -86,6 +95,13 @@ function branchLines(nodes: TreeNode[], width: number, prefix = ""): string[] {
 export function renderDiagram(diagram: Diagram, width: number): string[] {
   if (width < 1) return [];
   const count = diagram.columns.length;
+  if (diagram.overview) {
+    const cell = Math.max(24, ...diagram.columns.map(column => visibleWidth(column.heading)));
+    const perRow = Math.max(1, Math.floor((width + 2) / (cell + 2)));
+    // Keep readable subtree columns, wrapping complete branches onto the same page.
+    return Array.from({ length: Math.ceil(count / perRow) }, (_, i) =>
+      renderDiagram({ columns: diagram.columns.slice(i * perRow, (i + 1) * perRow) }, width).slice(i ? 1 : 0)).flat();
+  }
   const available = Math.max(1, Math.floor((width - (count - 1) * 2) / count));
   const contentWidth = Math.max(...diagram.columns.flatMap(column => [
     visibleWidth(column.heading), ...branchLines(column.nodes, available).map(visibleWidth),
@@ -141,9 +157,11 @@ const dateFormat = new Intl.DateTimeFormat("nl-NL", { day: "numeric", month: "lo
 const white = parseColor("#ffffff");
 const glowColors = ["#fffac2", "#d8ffc5", "#a5f3bb", "#91e4e8", "#a9baff", "#c4b5fd", "#f5ccf4"].map(parseColor);
 
-const neutralShadow = parseColor("#454545");
+const nearShadow = parseColor("#454545");
 const farShadow = parseColor("#292929");
-// One seven-column highlight crosses the date, then leaves a quiet interval.
+// Round 50px up to whole terminal rows; Pi uses 18px cells until measured.
+const headerTopRows = () => Math.ceil(50 / getCellDimensions().heightPx);
+// A pastel rainbow highlight travels over the white project name and date.
 export function dateGlow(x: number, width: number, frame: number) {
   const start = frame % (width + 24) - 8;
   const offset = x - start;
@@ -157,13 +175,11 @@ export function renderDate(date: Date, width: number, frame: number, theme: Them
   return renderBlockText(value, caption, width, frame, theme, compact);
 }
 
-export function renderProjectName(name: string, width: number, theme: Theme, compact = false): string[] {
+export function renderProjectName(name: string, width: number, theme: Theme, compact = false, frame = 0): string[] {
   const caption = safeLabel(name);
   const value = caption.toUpperCase();
   const supported = [...value].every(char => Object.hasOwn(digits, char));
-  const lines = renderBlockText(supported ? value : "", caption, width, 0, theme, compact || !supported, 1);
-  // Preserve the actual spelling as well as the uppercase block lettering.
-  return lines.length > 1 ? [...lines, center(theme.fg("muted", truncateToWidth(caption, width)), width)] : lines;
+  return renderBlockText(supported ? value : "", caption, width, frame, theme, compact || !supported, 1);
 }
 
 function renderBlockText(value: string, caption: string, width: number, frame: number, theme: Theme, compact: boolean, depth: 1 | 2 = 2): string[] {
@@ -177,7 +193,7 @@ function renderBlockText(value: string, caption: string, width: number, frame: n
       for (let x = 0; x < blockWidth; x++) {
         const color = dateGlow(x, blockWidth, frame);
         line += pixel(x, y) ? theme.style("█", { fg: color, bold: true })
-          : pixel(x - 1, y - 1) ? theme.style("▓", { fg: neutralShadow })
+          : pixel(x - 1, y - 1) ? theme.style("▓", { fg: nearShadow })
           : depth === 2 && pixel(x - 2, y - 2) ? theme.style("░", { fg: farShadow }) : " ";
       }
       return " ".repeat(Math.floor((width - blockWidth) / 2)) + line;
@@ -186,7 +202,33 @@ function renderBlockText(value: string, caption: string, width: number, frame: n
   }
   // Narrow terminals retain a readable date instead of clipping giant digits.
   const text = stripVTControlCharacters(truncateToWidth(` ${caption} `, Math.max(1, width - 1)));
-  return [center(theme.style(text, { fg: white, bold: true }), width)];
+  return [center(theme.style(text, { fg: dateGlow(0, visibleWidth(text), frame), bold: true }), width)];
+}
+
+export class ProjectHeader {
+  private frame = 0;
+  private timer: ReturnType<typeof setInterval> | undefined;
+  constructor(private name: string, private tui: TUI, private theme: Theme) {
+    this.timer = setInterval(() => { this.frame++; this.tui.requestRender(); }, 150);
+    this.timer.unref();
+  }
+  dispose() {
+    if (this.timer) clearInterval(this.timer);
+    this.timer = undefined;
+  }
+  invalidate() {}
+  render(width: number): string[] {
+    if (width < 1) return [];
+    const top = headerTopRows();
+    // Include the top gap when deciding whether both 3D blocks leave chat space.
+    const compact = this.tui.terminal.rows < 24 || top + 14 > Math.floor(this.tui.terminal.rows * 0.65);
+    return [
+      ...Array<string>(top).fill(""),
+      ...renderProjectName(this.name, width, this.theme, compact, this.frame),
+      "",
+      ...renderDate(new Date(), width, this.frame, this.theme, compact),
+    ];
+  }
 }
 
 export class StartDiagram {
@@ -231,15 +273,18 @@ export class StartDiagram {
       this.layout = renderDiagram(this.pages[this.page], inner);
       this.renderedPage = this.page;
     }
-    const heading = this.layout.slice(0, 3);
-    this.lines = this.layout.slice(3);
+    // Wrapped overview headings scroll with their branches, not above unrelated rows.
+    const headingRows = this.pages[this.page].overview ? 0 : 3;
+    const heading = this.layout.slice(0, headingRows);
+    this.lines = this.layout.slice(headingRows);
     // This is a transcript header, not an editor widget. Keep chat space below it.
     const rows = this.tui.terminal.rows;
-    const budget = Math.max(1, Math.min(22, Math.floor(rows * 0.55)));
+    const minTop = Math.min(headerTopRows(), Math.max(0, Math.floor(rows * 0.65) - 1));
+    const budget = Math.max(1, Math.min(22, Math.floor(rows * 0.55), Math.floor(rows * 0.65) - minTop));
     const date = budget >= 12 ? renderDate(new Date(), inner, this.frame, this.theme, budget < 20) : [];
     const parent = this.pages[this.page].parent;
     const ancestry = parent ? [center("│", inner), center(parent, inner)] : [];
-    const height = Math.min(this.lines.length, Math.max(0, budget - 6 - date.length - ancestry.length));
+    const height = Math.min(this.lines.length, Math.max(0, budget - 3 - heading.length - date.length - ancestry.length));
     this.scroll.updateLayout(this.lines.length, height, () => this.tui.requestRender());
     const first = this.scroll.scrollTop;
     const range = height ? `${first + 1}–${Math.min(this.lines.length, first + height)}` : "0";
@@ -253,9 +298,8 @@ export class StartDiagram {
       this.theme.fg("dim", center(footer, inner)),
       this.theme.fg("dim", center(POLICY, inner)),
     ].slice(0, budget);
-    // Lower the whole block on roomy terminals, without shrinking the tree viewport.
-    // Small terminals keep the compact layout; at least 35% remains for chat/editor.
-    const top = rows < 24 ? 0 : Math.max(0, Math.min(8, Math.floor((rows - content.length) / 4), Math.floor(rows * 0.65) - content.length));
+    // Keep at least 50px above the text when space permits, and 35% for chat/editor.
+    const top = rows < 24 ? minTop : Math.max(minTop, Math.min(8, Math.floor((rows - content.length) / 4), Math.floor(rows * 0.65) - content.length));
     return [...Array<string>(top).fill(""), ...content].map(line => " ".repeat(margin) + truncateToWidth(line, inner));
   }
 }

@@ -1,10 +1,10 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { basename, resolve } from "node:path";
-import { scanTree, StartDiagram, renderProjectName } from "../lib/start-diagram.ts";
+import { scanTree, StartDiagram, ProjectHeader } from "../lib/start-diagram.ts";
 import { isWorkspaceProject, presentationRoot as repository } from "../lib/project-presentation.mjs";
 
 export default function (pi: ExtensionAPI) {
-  let screen: StartDiagram | undefined;
+  let screen: StartDiagram | ProjectHeader | undefined;
   let generation = 0;
   const show = async (ctx: ExtensionContext) => {
     if (ctx.mode !== "tui" || !ctx.hasUI) return;
@@ -13,12 +13,12 @@ export default function (pi: ExtensionAPI) {
     await Promise.resolve();
     if (current !== generation) return;
     if (!isWorkspaceProject(ctx.cwd)) {
-      screen?.dispose(); screen = undefined;
       const name = basename(resolve(ctx.cwd)) || ctx.cwd;
-      ctx.ui.setHeader((tui, theme) => ({
-        render: (width: number) => renderProjectName(name, width, theme, tui.terminal.rows < 18),
-        invalidate() {},
-      }));
+      ctx.ui.setHeader((tui, theme) => {
+        screen?.dispose();
+        screen = new ProjectHeader(name, tui, theme);
+        return screen;
+      });
       return;
     }
     try {
@@ -48,7 +48,7 @@ export default function (pi: ExtensionAPI) {
       else if (["volgende", "vorige", "omlaag", "omhoog"].includes(action)) {
         if (!isWorkspaceProject(ctx.cwd)) return;
         if (!screen) await show(ctx);
-        screen?.navigate(action);
+        if (screen instanceof StartDiagram) screen.navigate(action);
       } else ctx.ui.notify("/oom-start toon | verberg | volgende | vorige | omlaag | omhoog", "info");
     },
   });

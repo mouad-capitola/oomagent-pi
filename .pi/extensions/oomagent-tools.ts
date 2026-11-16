@@ -10,6 +10,7 @@ const execFileAsync = promisify(execFile);
 export default function (pi: ExtensionAPI) {
   pi.registerTool(defineTool({
     name: "project_info",
+    exposure: "deferred",
     label: "Project info",
     description: "Summarize project structure (two levels, maximum 200 entries) and local Git information: branch, repository root, working-tree status, upstream, remote names, and latest commit. Does not read file contents or contact remotes. .git and node_modules contents are omitted. Unavailable Git values are null.",
     parameters: Type.Object({}),

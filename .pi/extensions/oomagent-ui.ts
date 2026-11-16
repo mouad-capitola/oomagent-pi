@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { basename, dirname, join, resolve } from "node:path";
-import { readdir, realpath } from "node:fs/promises";
+import { lstat, readdir, realpath } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { CustomEditor, type ExtensionAPI, type ExtensionContext, type Theme } from "@earendil-works/pi-coding-agent";
 import { createQuotaMonitor, formatContext, formatQuota, isCodex } from "../lib/footer-limits.ts";
@@ -125,6 +125,63 @@ export async function readFooterGitStatus(cwd: string, signal?: AbortSignal): Pr
   return parseFooterGitStatus(stdout);
 }
 
+type FooterGitSummary = FooterGitStatus & { repositories?: number; unavailable?: number };
+
+// A workspace like oomagent is not itself a repo. Only fall back for that case:
+// timeouts, missing Git and broken repositories must not become a clean total.
+export async function readFooterGitSummary(cwd: string, signal?: AbortSignal): Promise<FooterGitSummary> {
+  signal?.throwIfAborted();
+  let notRepository: unknown;
+  try {
+    return await readFooterGitStatus(cwd, signal);
+  } catch (error) {
+    const failure = error as { code?: number; stderr?: string };
+    if (failure.code !== 128 || !failure.stderr?.startsWith("fatal: not a git repository (or any of the parent directories):")) throw error;
+    notRepository = error;
+  }
+  const root = await realpath(cwd);
+  const ownMarker = await lstat(join(root, ".git")).catch(error => {
+    if (error.code !== "ENOENT") throw error;
+    return undefined;
+  });
+  if (ownMarker) throw notRepository;
+  const repositories: string[] = [];
+  for (const entry of await readdir(root, { withFileTypes: true })) {
+    signal?.throwIfAborted();
+    if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
+    const path = join(root, entry.name);
+    try {
+      // No recursive scanning or symlink/junction traversal. .git files support worktrees.
+      if (await realpath(path) !== path) continue;
+      const marker = await lstat(join(path, ".git"));
+      if (marker.isDirectory() || marker.isFile()) repositories.push(path);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
+  if (!repositories.length) throw notRepository;
+  const summary: FooterGitSummary = {
+    branch: "", repositories: repositories.length, unavailable: 0,
+    changed: 0, staged: 0, untracked: 0, conflicts: 0, ahead: null, behind: null,
+  };
+  // Keep the terminal responsive and avoid spawning one process per repo at once.
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(4, repositories.length) }, async () => {
+    while (next < repositories.length) {
+      signal?.throwIfAborted();
+      const path = repositories[next++];
+      try {
+        const status = await readFooterGitStatus(path, signal);
+        for (const key of ["changed", "staged", "untracked", "conflicts"] as const) summary[key] += status[key];
+      } catch {
+        signal?.throwIfAborted();
+        summary.unavailable!++;
+      }
+    }
+  }));
+  return summary;
+}
+
 type ProjectTreeEntry = { text: string; directory: boolean };
 
 // Names only: no file contents, no symlink traversal, bounded two-level preview.
@@ -243,7 +300,8 @@ export default function (pi: ExtensionAPI, { footerOnly = false, gitCwd }: { foo
     ctx.ui.setFooter(footerEnabled ? (tui) => {
       let disposed = false;
       let tickerFrame = 0;
-      let gitStatus: FooterGitStatus | undefined;
+      let gitStatus: FooterGitSummary | undefined;
+      const gitController = new AbortController();
       let gitLoading = true;
       let readingGit = false;
       redrawFooter = () => tui.requestRender();
@@ -251,7 +309,7 @@ export default function (pi: ExtensionAPI, { footerOnly = false, gitCwd }: { foo
         if (disposed || readingGit) return;
         readingGit = true;
         try {
-          const next = await readFooterGitStatus(gitCwd ?? ctx.cwd);
+          const next = await readFooterGitSummary(gitCwd ?? ctx.cwd, gitController.signal);
           if (!disposed) gitStatus = next;
         } catch {
           if (!disposed) gitStatus = undefined;
@@ -285,6 +343,7 @@ export default function (pi: ExtensionAPI, { footerOnly = false, gitCwd }: { foo
         if (animation) clearInterval(animation);
         syncFooterAnimation = undefined;
         clearInterval(gitTimer);
+        gitController.abort();
         redrawFooter = undefined;
         refreshFooterGit = undefined;
       };
@@ -328,10 +387,12 @@ export default function (pi: ExtensionAPI, { footerOnly = false, gitCwd }: { foo
           const runtime = theme.style(`${indicator} ${duration}`, { fg: statusColor, bold: true })
             + theme.style(` · ${state}`, { fg: statusColor });
           const git = gitStatus
-            ? theme.style(`⎇ ${clean(gitStatus.branch)}`, { fg: colors.green, bold: true }) +
-              theme.style(` · ${gitStatus.changed} gewijzigd`, {
-                fg: gitStatus.conflicts ? colors.red : gitStatus.changed ? colors.amber : colors.muted,
+            ? theme.style(`⎇ ${gitStatus.repositories === undefined ? clean(gitStatus.branch) : `${gitStatus.repositories} repos`}`, { fg: colors.green, bold: true }) +
+              theme.style(` · ${gitStatus.unavailable && gitStatus.unavailable === gitStatus.repositories
+                ? "wijzigingen onbekend" : `${gitStatus.changed}${gitStatus.unavailable ? "+" : ""} gewijzigd`}`, {
+                fg: gitStatus.conflicts ? colors.red : gitStatus.changed || gitStatus.unavailable ? colors.amber : colors.muted,
               }) +
+              (gitStatus.unavailable ? theme.style(` · ${gitStatus.unavailable} onleesbaar`, { fg: colors.amber }) : "") +
               (gitStatus.ahead === null ? "" : " · " +
                 theme.style(`↑${gitStatus.ahead}`, { fg: colors.green, bold: true }) + " " +
                 theme.style(`↓${gitStatus.behind}`, { fg: colors.blue, bold: true }))

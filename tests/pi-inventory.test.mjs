@@ -5,6 +5,7 @@ import { mkdtemp, mkdir, writeFile, rm, symlink, link, readFile, realpath } from
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { inventory, declaredTools, parseAdditions } from "../.pi/lib/pi-inventory.mjs";
+import { directoryLinkType, fileSymlinkSkip } from "./helpers/symlinks.mjs";
 
 async function fixture(fn) {
   const root = await realpath(await mkdtemp(join(tmpdir(), "pi-inventory-test-")));
@@ -83,32 +84,41 @@ await test("missing project/config gives partial result, not false comparison", 
   assert.equal(report.comparison, null);
 }));
 
-await test("symlink project, .pi, skill and MCP files are not followed", () => fixture(async ({ root, put, setup }) => {
+await test("directory-link project, .pi and skills are not followed", () => fixture(async ({ root, put, setup }) => {
   await setup("source");
   await put("source/.pi/skills/private/SKILL.md", skill("private"));
-  await symlink(join(root, "source"), join(root, "alias"));
+  await symlink(join(root, "source"), join(root, "alias"), directoryLinkType);
   const blocked = await inventory({ root, projects: ["alias"] }, noHistory);
   assert.equal(blocked.projects[0].available, false);
   await setup("first");
-  await symlink(join(root, "source/.pi/skills/private"), join(root, "first/.pi/skills/link"));
-  await symlink(join(root, "source/.pi/mcp.json"), join(root, "first/.pi/extensions/linked.ts"));
+  await symlink(join(root, "source/.pi/skills/private"), join(root, "first/.pi/skills/link"), directoryLinkType);
   const report = await inventory({ root, projects: ["first"] }, noHistory);
   assert.deepEqual(report.projects[0].skills, []);
   assert.deepEqual(report.projects[0].extensions, []);
   assert.ok(report.projects[0].warnings.length);
   await mkdir(join(root, "second"));
-  await symlink(join(root, "source/.pi"), join(root, "second/.pi"));
+  await symlink(join(root, "source/.pi"), join(root, "second/.pi"), directoryLinkType);
   assert.equal((await inventory({ root, projects: ["second"] }, noHistory)).projects[0].available, false);
 }));
 
-await test("symlink MCP configuration and hardlinked extension rejected without values", () => fixture(async ({ root, put }) => {
+await test("file-symlink extensions and MCP configuration are rejected without values", { skip: fileSymlinkSkip }, () => fixture(async ({ root, put }) => {
   await mkdir(join(root, "first/.pi/extensions"), { recursive: true });
   await put("sensitive.txt", "private-sensitive-value");
   await symlink(join(root, "sensitive.txt"), join(root, "first/.pi/mcp.json"));
-  await link(join(root, "sensitive.txt"), join(root, "first/.pi/extensions/leak.ts"));
+  await symlink(join(root, "sensitive.txt"), join(root, "first/.pi/extensions/leak.ts"));
   const report = await inventory({ root, projects: ["first"] }, noHistory);
   assert.deepEqual(report.projects[0].mcpServers, []);
   assert.deepEqual(report.projects[0].extensions, []);
+  assert.doesNotMatch(JSON.stringify(report), /private-sensitive-value/);
+}));
+
+await test("hardlinked extensions are rejected without values on every platform", () => fixture(async ({ root, put, setup }) => {
+  await setup("first");
+  await put("sensitive.txt", "private-sensitive-value");
+  await link(join(root, "sensitive.txt"), join(root, "first/.pi/extensions/leak.ts"));
+  const report = await inventory({ root, projects: ["first"] }, noHistory);
+  assert.deepEqual(report.projects[0].extensions, []);
+  assert.ok(report.projects[0].warnings.length);
   assert.doesNotMatch(JSON.stringify(report), /private-sensitive-value/);
 }));
 
@@ -189,7 +199,7 @@ await test("directory bounds and duplicate tool comparison are explicit", () => 
 
 await test("Projects root symlink is rejected", () => fixture(async ({ root }) => {
   await mkdir(join(root, "real"));
-  await symlink(join(root, "real"), join(root, "alias"));
+  await symlink(join(root, "real"), join(root, "alias"), directoryLinkType);
   await assert.rejects(inventory({ root: join(root, "alias") }, noHistory), /Projects directory unavailable or unsafe/);
 }));
 
@@ -201,7 +211,7 @@ await test("package manifest exposes pi_inventory without removing ci_status", a
 
 const deps = {};
 globalThis.__inventoryExtensionTest = deps;
-const source = (await readFile(new URL("../.pi/extensions/pi-inventory.ts", import.meta.url), "utf8")).replace(/^import .*;\n/gm, "");
+const source = (await readFile(new URL("../.pi/extensions/pi-inventory.ts", import.meta.url), "utf8")).replace(/^import .*;\r?\n/gm, "");
 const prelude = `
 const deps = globalThis.__inventoryExtensionTest;
 const homedir = () => "/home/test";

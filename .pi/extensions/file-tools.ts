@@ -45,6 +45,7 @@ function failure(tool: string, error: unknown): Error {
 export default function (pi: ExtensionAPI) {
   pi.registerTool(defineTool({
     name: "file_writer",
+    exposure: "deferred",
     label: "File writer",
     description: "Create a new UTF-8 file inside the project. Never overwrites existing files. Parent directories must exist. Symlink paths, .git, and .env files are blocked.",
     parameters: Type.Object({
@@ -73,6 +74,7 @@ export default function (pi: ExtensionAPI) {
 
   pi.registerTool(defineTool({
     name: "file_editor",
+    exposure: "deferred",
     label: "File editor",
     description: "Replace exactly one literal occurrence of old_text with new_text in an existing UTF-8 project file (maximum 1 MiB). Fails if there are zero or multiple matches. Uses atomic replacement, preserving permission bits. Symlink paths, .git, and .env files are blocked.",
     parameters: Type.Object({

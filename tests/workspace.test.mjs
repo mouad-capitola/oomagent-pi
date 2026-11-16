@@ -1,15 +1,15 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, symlinkSync, linkSync, rmSync, readdirSync, realpathSync, statSync } from "node:fs";
-import { tmpdir, homedir } from "node:os";
-import { join } from "node:path";
-import { createRequire, stripTypeScriptTypes } from "node:module";
-import { pathToFileURL } from "node:url";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { createRequire } from "node:module";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { directoryLinkType, fileSymlinkSkip } from "./helpers/symlinks.mjs";
 import { checkedPath, listFolder, readDocument, saveDocument, projectFor, TextBuffer, safeLabel, MAX_FILE_BYTES } from "../.pi/lib/workspace-files.mjs";
 
-// Test against the actual managed Pi host, not the older development peer copy.
-const host = process.env.PI_TEST_HOST ?? join(homedir(), ".pi/agent/install/releases",
-  readFileSync(join(homedir(), ".pi/agent/install/current-version"), "utf8").trim(), "node_modules/@earendil-works/pi-coding-agent");
+// Use the installed Pi peer or an explicitly selected host, without installing it.
+const host = process.env.PI_TEST_HOST ?? dirname(dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent"))));
 const requireHost = createRequire(join(host, "package.json"));
 const tuiUrl = pathToFileURL(requireHost.resolve("@earendil-works/pi-tui")).href;
 const codingUrl = pathToFileURL(join(host, "dist/index.js")).href;
@@ -19,22 +19,16 @@ const themeModule = await import(pathToFileURL(join(host, "dist/modes/interactiv
 const { validateThemeJson } = await import(pathToFileURL(join(host, "dist/modes/interactive/theme/theme-schema.js")).href);
 const themePath = new URL("../.pi/themes/oomagent-swiss.json", import.meta.url);
 validateThemeJson("oomagent-swiss", JSON.parse(readFileSync(themePath, "utf8")));
-themeModule.setThemeInstance(themeModule.loadThemeFromPath(themePath.pathname, "truecolor"));
+themeModule.setThemeInstance(themeModule.loadThemeFromPath(fileURLToPath(themePath), "truecolor"));
 const { visibleWidth, stripTerminalSequences, CURSOR_MARKER } = await import(tuiUrl);
-const modelUrl = new URL("../.pi/lib/workspace-files.mjs", import.meta.url).href;
-const compile = source => "data:text/javascript;base64," + Buffer.from(stripTypeScriptTypes(source, { mode: "transform" })).toString("base64");
-const changesUrl = new URL("../.pi/lib/workspace-changes.mjs", import.meta.url).href;
-const uiUrl = compile(readFileSync(new URL("../.pi/lib/workspace-ui.ts", import.meta.url), "utf8")
-  .replace('"@earendil-works/pi-coding-agent"', JSON.stringify(codingUrl))
-  .replace('"@earendil-works/pi-tui"', JSON.stringify(tuiUrl))
-  .replace('"./workspace-files.mjs"', JSON.stringify(modelUrl))
-  .replace('"./workspace-changes.mjs"', JSON.stringify(changesUrl)));
-const { WorkspaceState, WorkspaceEditor, WelcomeScreen, dateArt } = await import(uiUrl);
-const entryUrl = compile(readFileSync(new URL("../.pi/extensions/oomagent-workspace.ts", import.meta.url), "utf8")
-  .replace('"../lib/project-presentation.mjs"', JSON.stringify(new URL("../.pi/lib/project-presentation.mjs", import.meta.url).href))
-  .replace('"../lib/workspace-ui.ts"', JSON.stringify(uiUrl))
-  .replace('"../lib/workspace-files.mjs"', JSON.stringify(modelUrl)));
-const { default: register } = await import(entryUrl);
+// Pi already supplies Jiti; reuse it for parameter properties on Node 26.
+const { createJiti } = requireHost("jiti");
+const jiti = createJiti(import.meta.url, { fsCache: false, tryNative: false, alias: {
+  "@earendil-works/pi-coding-agent": fileURLToPath(codingUrl),
+  "@earendil-works/pi-tui": fileURLToPath(tuiUrl),
+} });
+const { WorkspaceState, WorkspaceEditor, WelcomeScreen, dateArt } = await jiti.import("../.pi/lib/workspace-ui.ts");
+const { default: register } = await jiti.import("../.pi/extensions/oomagent-workspace.ts");
 
 function fixture(t) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "pi-workspace-test-")));
@@ -72,10 +66,10 @@ test("boundaries, secrets, symlinks, hardlinks, binary and invalid UTF-8 are blo
   assert.throws(() => checkedPath(root, "../outside"), /Buiten/);
   assert.throws(() => checkedPath(root, root + "-other"), /Buiten/);
   writeFileSync(join(root, ".env.local"), "not a real secret");
-  symlinkSync(path, join(root, "linked"));
-  symlinkSync(tmpdir(), join(root, "outside"));
+  symlinkSync(join(root, "project"), join(root, "linked"), directoryLinkType);
+  symlinkSync(tmpdir(), join(root, "outside"), directoryLinkType);
   assert.throws(() => readDocument(root, ".env.local"), /Gevoelig/);
-  assert.throws(() => readDocument(root, "linked"), /Symlink/);
+  assert.throws(() => readDocument(root, "linked/code.ts"), /Symlink/);
   assert.throws(() => checkedPath(root, "outside"), /Symlink/);
   const entries = listFolder(root, root);
   assert.ok(entries.find(e => e.name === ".env.local").blocked);
@@ -87,6 +81,12 @@ test("boundaries, secrets, symlinks, hardlinks, binary and invalid UTF-8 are blo
   linkSync(path, join(root, "hard"));
   assert.throws(() => readDocument(root, path), /hardlinks/);
   assert.equal(safeLabel("evil\x1b[2J\u202e"), "evil?[2J?");
+});
+test("file symlinks remain blocked even when their target is inside the project", { skip: fileSymlinkSkip }, t => {
+  const { root, path } = fixture(t);
+  symlinkSync(path, join(root, "file-link"));
+  assert.throws(() => readDocument(root, "file-link"), /Symlink/);
+  assert.ok(listFolder(root, root).find(entry => entry.name === "file-link").link);
 });
 test("file size boundary and project selection are explicit", t => {
   const { root, path } = fixture(t);
@@ -172,7 +172,7 @@ for (const reason of ["startup", "reload", "new", "resume", "fork"]) {
     t.mock.method(WorkspaceState.prototype, "rebuild", function () { state = this; });
     const poll = t.mock.method(WorkspaceState.prototype, "poll", () => []);
     const tui = { terminal: { rows: 40, columns: 100, write() {} }, requestRender() {}, addInputListener: () => () => {} };
-    const ctx = { mode: "tui", hasUI: true, cwd: new URL("../", import.meta.url).pathname, ui: {
+    const ctx = { mode: "tui", hasUI: true, cwd: fileURLToPath(new URL("../", import.meta.url)), ui: {
       theme,
       setEditorComponent(factory) { editor = factory(tui, editorTheme, keys); },
       custom() { assert.fail("Startup must not open a welcome overlay"); },
@@ -240,7 +240,7 @@ test("reload follows saved external edits but never overwrites a dirty buffer", 
 test("canonical root aliases work while descendant symlinks stay blocked", t => {
   const { root, path } = fixture(t);
   const alias = root + "-alias";
-  symlinkSync(root, alias);
+  symlinkSync(root, alias, directoryLinkType);
   t.after(() => rmSync(alias));
   assert.equal(checkedPath(alias, join(alias, "project/code.ts")), path);
   assert.equal(projectFor(alias, path), join(root, "project"));

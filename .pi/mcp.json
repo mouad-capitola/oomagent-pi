@@ -10,11 +10,12 @@
         ".pi/playwright-mcp.json"
       ],
       "exposure": "codemode",
-      "description": "Playwright browser tests with a separate in-memory Chromium profile; never shares the personal browser login."
+      "description": "Playwright browser tests using installed Google Chrome with a separate in-memory profile; never shares the personal browser login."
     },
     "lightpanda": {
-      "command": "~/.local/bin/lightpanda",
+      "command": "node",
       "args": [
+        "scripts/lightpanda-mcp.mjs",
         "mcp",
         "--block-private-networks",
         "--block-cidrs",
@@ -42,7 +43,7 @@
     "zap": {
       "url": "http://127.0.0.1:8282/",
       "headers": {
-        "Authorization": "!python3 -c \"from pathlib import Path; import xml.etree.ElementTree as E; key=E.parse(Path.home() / 'Library/Application Support/ZAP/config.xml').getroot().findtext('mcp/securityKey'); assert key, 'ZAP MCP key missing'; print(key, end='')\""
+        "Authorization": "!node scripts/zap-mcp-key.mjs"
       },
       "exposure": "codemode",
       "description": "Lokale ZAP securitytests en scanresultaten. Start scans alleen met expliciete toestemming voor het doelwit."

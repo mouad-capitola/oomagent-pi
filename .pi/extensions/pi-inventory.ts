@@ -7,6 +7,7 @@ import { inventory } from "../lib/pi-inventory.mjs";
 export default function (pi: ExtensionAPI) {
   pi.registerTool(defineTool({
     name: "pi_inventory",
+    exposure: "deferred",
     label: "Pi inventory",
     description: "Read-only comparison of project-local skills, statically declared own tools, MCP server names/enabled flags and recent added Git files. Defaults to oomagent-pi and oomagent-pi-upgrade under ~/Projects; detects upgrade workspace/.pi. No credentials, network or tool execution. Current-session registered/active names are separate from on-disk presence; operational testing is not performed. Output capped at 40 KB/1500 lines.",
     parameters: Type.Object({

@@ -4,6 +4,7 @@ import { stripTypeScriptTypes } from "node:module";
 import { chmod, mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { directoryLinkType, fileSymlinkSkip } from "./helpers/symlinks.mjs";
 
 // Test the exported filesystem core without installing Pi or third-party packages.
 // Pi registration is checked separately by loading the extension in Pi.
@@ -68,18 +69,30 @@ await test("path traversal, absolute paths, directories and missing files", () =
   await assert.rejects(readProjectFile(root, "folder"), /directory, not a file/);
   await assert.rejects(readProjectFile(root, "missing.txt"), /does not exist/);
   await writeFile(join(root, "file.txt"), "text");
-  await assert.rejects(readProjectFile(root, "file.txt/child.txt"), /parent path/);
+  await assert.rejects(readProjectFile(root, "file.txt/child.txt"), process.platform === "win32" ? /does not exist/ : /parent path/);
   await writeFile(join(root, "file.json"), "{}");
   await assert.rejects(readProjectFile(root, "file.json"), /only .txt and .csv/);
 }));
 
-await test("symlink boundaries, prefix sibling and loops", () => fixture(async (root, parent) => {
+await test("directory-link boundaries reject prefix siblings and allow internal targets", () => fixture(async (root, parent) => {
+  const sibling = join(parent, "project-other");
+  await mkdir(sibling);
+  await writeFile(join(sibling, "outside.txt"), "outside");
+  await symlink(sibling, join(root, "outside-dir"), directoryLinkType);
+  await assert.rejects(readProjectFile(root, "outside-dir/outside.txt"), /outside the project/);
+  await mkdir(join(root, "inside"));
+  await writeFile(join(root, "inside", "text.txt"), "inside");
+  await symlink(join(root, "inside"), join(root, "alias-dir"), directoryLinkType);
+  assert.equal((await readProjectFile(root, "alias-dir/text.txt")).content[0].text, "inside");
+}));
+
+await test("file symlink boundaries, prefix sibling and loops", { skip: fileSymlinkSkip }, () => fixture(async (root, parent) => {
   const sibling = join(parent, "project-other");
   await mkdir(sibling);
   await writeFile(join(sibling, "outside.txt"), "outside");
   await symlink(join(sibling, "outside.txt"), join(root, "outside.txt"));
   await assert.rejects(readProjectFile(root, "outside.txt"), /outside the project/);
-  await symlink(sibling, join(root, "outside-dir"));
+  await symlink(sibling, join(root, "outside-dir"), directoryLinkType);
   await assert.rejects(readProjectFile(root, "outside-dir/outside.txt"), /outside the project/);
   await writeFile(join(root, "inside.txt"), "inside");
   await symlink("inside.txt", join(root, "alias.txt"));

@@ -16,6 +16,7 @@ function within(root: string, path: string): boolean {
 export default function (pi: ExtensionAPI) {
   pi.registerTool(defineTool({
     name: "test_runner",
+    exposure: "deferred",
     label: "Test runner",
     description: "Run Node.js built-in tests (.test/.spec.js, .mjs or .cjs), defaulting to the tests directory. Accepts a project-relative file or directory. No shell commands or package installation. Tests execute trusted project code with Pi's OS permissions and may modify files; this is NOT a sandbox. Symlink paths are blocked. Returns output, exit code, and timeout state.",
     parameters: Type.Object({

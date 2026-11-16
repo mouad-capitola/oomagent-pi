@@ -1,10 +1,31 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { execFileSync } from "node:child_process";
-import { join } from "node:path";
+import { join, posix, win32 } from "node:path";
 import { tmpdir } from "node:os";
-import { scanContent, scanGitTree, scanGitHistory, scanWorktree } from "../scripts/secret-scan.mjs";
+import { isWithinRoot, scanContent, scanGitTree, scanGitHistory, scanWorktree } from "../scripts/secret-scan.mjs";
+
+for (const [name, paths, root] of [
+  ["POSIX", posix, "/workspace/repo"],
+  ["Windows", win32, "C:\\workspace\\repo"],
+  ["Windows UNC", win32, "\\\\server\\share\\repo"],
+]) {
+  test(`${name} containment accepts children but rejects root, parents and sibling prefixes`, () => {
+    for (const child of ["README.md", "sub/file.txt", "..notes/file.txt"]) {
+      assert.equal(isWithinRoot(root, paths.resolve(root, child), paths), true, child);
+    }
+    for (const outside of [root, paths.dirname(root), `${root}-other/file.txt`, paths.resolve(root, "../outside.txt")]) {
+      assert.equal(isWithinRoot(root, outside, paths), false, outside);
+    }
+  });
+}
+
+test("Windows containment handles mixed separators and rejects other drives or shares", () => {
+  assert.equal(isWithinRoot("C:\\repo", "C:/repo/sub/file.txt", win32), true);
+  assert.equal(isWithinRoot("C:\\repo", "D:\\repo\\file.txt", win32), false);
+  assert.equal(isWithinRoot("\\\\server\\share\\repo", "\\\\server\\other\\repo\\file.txt", win32), false);
+});
 
 test("credential checks redact literals including env defaults and OAuth prefixes", () => {
   const secret = "abcdef0123456789".repeat(4);
@@ -63,7 +84,32 @@ test("ignored local envs are never opened; external links fail tree approval", (
   writeFileSync(join(root, ".env"), "unread-local-fixture");
   assert.equal(scanWorktree(root).findings.length, 0);
   mkdirSync(join(root, "sub"));
-  symlinkSync("/outside/not-read", join(root, "sub", "link"));
+  // Store the actual symlink mode in Git without requiring Windows symlink privileges.
+  writeFileSync(join(root, "sub", "link"), "/outside/not-read");
   git("add", ".");
+  const object = git("hash-object", "-w", "sub/link");
+  git("update-index", "--cacheinfo", `120000,${object},sub/link`);
   assert.throws(() => scanGitTree(root, git("write-tree")), /external symlink/);
+}));
+
+test("tree accepts internal relative links and rejects escaping or absolute targets", () => fixture((root, git) => {
+  mkdirSync(join(root, "sub"));
+  writeFileSync(join(root, "inside.txt"), "safe fixture\n");
+  git("add", "inside.txt");
+  for (const [target, allowed] of [
+    ["../inside.txt", true],
+    ["../../outside.txt", false],
+    [`../../${root.split(/[\\/]/).at(-1)}-other/inside.txt`, false],
+    ["..", false],
+    [join(root, "inside.txt"), false],
+    ["/outside/not-read", false],
+    ...(process.platform === "win32" ? [["Z:\\outside\\not-read", false], ["\\\\server\\share\\not-read", false]] : []),
+  ]) {
+    writeFileSync(join(root, "sub", "link"), target);
+    const object = git("hash-object", "-w", "sub/link");
+    git("update-index", "--add", "--cacheinfo", `120000,${object},sub/link`);
+    const tree = git("write-tree");
+    if (allowed) assert.deepEqual(scanGitTree(root, tree).findings, [], target);
+    else assert.throws(() => scanGitTree(root, tree), /external symlink/, target);
+  }
 }));

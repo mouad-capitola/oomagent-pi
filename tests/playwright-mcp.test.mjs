@@ -11,14 +11,16 @@ test("Playwright MCP pins the package and uses the project configuration", () =>
   assert.equal(config.env, undefined);
 });
 
-test("Playwright has a separate visible browser without imported authentication", () => {
+test("Playwright uses installed Chrome in a separate visible browser without imported authentication", () => {
   const config = read("../.pi/playwright-mcp.json");
   assert.equal(config.browser.browserName, "chromium");
   assert.equal(config.browser.isolated, true);
-  assert.equal(config.browser.launchOptions.channel, "chromium");
+  assert.equal(config.browser.launchOptions.channel, "chrome");
   assert.equal(config.browser.launchOptions.headless, false);
   assert.equal(config.browser.launchOptions.args, undefined);
+  assert.equal(config.browser.launchOptions.executablePath, undefined);
   assert.equal(config.browser.cdpEndpoint, undefined);
+  assert.equal(config.browser.remoteEndpoint, undefined);
   assert.equal(config.browser.userDataDir, undefined);
   assert.equal(config.browser.contextOptions.storageState, undefined);
   assert.equal(config.extension, undefined);

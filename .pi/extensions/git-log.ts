@@ -8,6 +8,7 @@ const execFileAsync = promisify(execFile);
 export default function (pi: ExtensionAPI) {
   pi.registerTool(defineTool({
     name: "git_log",
+    exposure: "deferred",
     label: "Git log",
     description: "Show recent commits reachable from HEAD in the current project's Git repository. Read-only; defaults to 20 commits (maximum 100). Reports an empty history when the current branch has no commits.",
     parameters: Type.Object({

@@ -16,6 +16,7 @@ function excluded(name: string): boolean {
 export default function (pi: ExtensionAPI) {
   pi.registerTool(defineTool({
     name: "text_search",
+    exposure: "deferred",
     label: "Text search",
     description: "Recursively search project UTF-8 text files for a literal string (not regex). Returns project-relative file paths, 1-based line numbers, and matching lines. Skips symlinks, .git, node_modules, .env files, binary files, and files over 1 MiB. Defaults to case-insensitive search and 100 matching lines. Does not modify files.",
     parameters: Type.Object({

@@ -167,6 +167,7 @@ export async function readProjectFile(cwd: string, file_path: string, signal?: A
 export default function (pi: ExtensionAPI) {
   pi.registerTool(defineTool({
     name: "file_reader",
+    exposure: "deferred",
     label: "File reader",
     description: "Read project-relative .txt or comma-delimited .csv files up to 1 MiB. Supports strict UTF-8 and BOM-marked UTF-16. CSV uses unique header names and returns columns/rows. Blocks traversal, outside-project symlinks, directories, and binary content. Project root is Pi's working directory.",
     parameters: Type.Object({

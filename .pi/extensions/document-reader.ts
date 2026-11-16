@@ -39,6 +39,7 @@ type PdfResult = { text: string; pageCount: number; extractionTruncated: boolean
 export default function (pi: ExtensionAPI) {
   pi.registerTool(defineTool({
     name: "document_reader",
+    exposure: "deferred",
     label: "Document reader",
     description: "Extract text from project-relative .docx and .pdf files on macOS, using system textutil and Swift/PDFKit (no npm packages). Maximum 20 MiB input; PDF extraction limited to 200 pages/200,000 characters. Returns text and metadata, not formatting or images. Scanned PDFs need OCR and locked PDFs are not supported. Blocks traversal and outside-project symlinks. May require installed Apple command-line developer tools for Swift.",
     parameters: Type.Object({

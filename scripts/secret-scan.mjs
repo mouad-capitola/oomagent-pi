@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync, lstatSync } from "node:fs";
-import { resolve, basename } from "node:path";
+import path, { resolve, basename, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const MAX_BLOB = 2 * 1024 * 1024;
@@ -15,6 +15,13 @@ function git(root, args, input) {
     // Git errors can include buffered blob contents. Never forward them.
     throw new Error("Security scan unavailable: Git operation failed.");
   }
+}
+
+// A lexical containment check; callers must still avoid following filesystem symlinks.
+export function isWithinRoot(root, target, paths = path) {
+  const relative = paths.relative(root, target);
+  return relative !== "" && relative !== ".."
+    && !relative.startsWith(`..${paths.sep}`) && !paths.isAbsolute(relative);
 }
 
 function placeholder(value) {
@@ -129,7 +136,7 @@ export function scanGitTree(root, revision) {
     if (mode === "120000") {
       const target = git(root, ["cat-file", "blob", oid]).toString("utf8");
       const destination = resolve(root, file, "..", target);
-      if (target.startsWith("/") || !destination.startsWith(resolve(root) + "/")) {
+      if (isAbsolute(target) || !isWithinRoot(root, destination)) {
         throw new Error("Security scan blocked an external symlink.");
       }
     }
@@ -154,7 +161,7 @@ export function scanWorktree(root) {
   let scanned = 0, binary = 0;
   for (const file of files) {
     const path = resolve(root, file);
-    if (!path.startsWith(resolve(root) + "/")) throw new Error("Invalid scan path.");
+    if (!isWithinRoot(root, path)) throw new Error("Invalid scan path.");
     let stat;
     try { stat = lstatSync(path); } catch (error) { if (error.code === "ENOENT") continue; throw new Error("Unreadable scan target."); }
     if (stat.isSymbolicLink()) continue; // Git tree checks the link, never follows it.

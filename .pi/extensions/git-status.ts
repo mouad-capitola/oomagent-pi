@@ -45,6 +45,7 @@ export function parseStatus(output: string): { branchSummary: string; files: Sta
 export default function (pi: ExtensionAPI) {
   pi.registerTool(defineTool({
     name: "git_status",
+    exposure: "deferred",
     label: "Git status",
     description: "Show local Git status: branch/upstream summary, staged and unstaged changes, untracked files, and conflicts. Includes individual untracked files; ignores Git-ignored files. Paths are relative to the repository root. Read-only, no file contents or remote network requests.",
     parameters: Type.Object({}, { additionalProperties: false }),

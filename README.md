@@ -5,8 +5,8 @@ Shared project-specific configuration for Pi. No application logic is included.
 Start Pi from this repository and approve project trust after reviewing the configuration. Use `/reload` if Pi is already running.
 
 - `AGENTS.md`: repository instructions.
-- `.pi/settings.json`: explicitly enables `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`, and `tool_search`; disables the built-in codemode extension with `extensions: ["-builtin:codemode"]`. MCP's existing `autoEnableCodemode: false` is retained. Restart Pi to apply the complete tool selection; `/reload` alone does not disable removed tools.
-- `.pi/APPEND_SYSTEM.md`: symlink to `.pi/system-prompt.md`, containing the always-available persona and safety guidance.
+- `.pi/settings.json`: starts new sessions with only `tool_search`; `.pi/extensions/lazy-tools.ts` retains Pi's seven native tools with deferred discovery, alongside the fifteen deferred custom tools. The built-in codemode extension remains disabled with `extensions: ["-builtin:codemode"]`; MCP's existing `autoEnableCodemode: false` is retained. Reload and start a new session to evaluate the initial declaration set. See `LAZY-TOOLS.md`.
+- `.pi/APPEND_SYSTEM.md`: regular UTF-8 copy of `.pi/system-prompt.md`, containing the always-available persona and safety guidance without requiring Windows symlink privileges. Keep both files in sync; tests compare their full contents (allowing LF/CRLF).
 - `.pi/extensions/oomagent-context.ts`: omits local `AGENTS.md`/`AGENTS.override.md`/`CLAUDE.md` content from the model prompt for exact greetings and thanks before a task in the active branch. Real tasks, ambiguous messages and image attachments keep all rules; after a task, follow-ups keep them too. Ancestor/user instructions are never removed. Pi still discovers these files locally; this changes model context, not filesystem loading or access permissions.
 - `.pi/extensions/oomagent-tools.ts`: read-only `project_info` tool returning the working directory, Git branch, and repository root. Unavailable Git values are `null`; detached HEAD has no branch.
 - `.pi/skills/`: shared intake, debugging, review and agent-delivery workflows.
@@ -16,7 +16,39 @@ Pi loads the TypeScript extensions directly and supplies their peer dependencies
 
 `AGENTS.md` contains the ten-step development workflow: understand → Serena exploration → impact analysis → small plan → targeted changes → automated checks → functional validation → investigate failures → diff review → concise report. It is omitted from a greeting-only model request and included when work starts.
 
-After `/reload`, start a **new session** to evaluate greeting context: existing conversations retain earlier instructions and tool output. Codemode is disabled; standard tools remain directly declared and `tool_search` can load MCP tools without scripts. The inert `codemode.mode: "on"` setting also avoids hiding standard tools if codemode is explicitly re-enabled later. The always-loaded prompt is kept compact; verify recorded provider usage after a fresh `hi` with the same model and configuration. No fixed token total is guaranteed: base instructions, skill descriptions, tools and MCP configuration also contribute. The custom footer sums recorded provider usage since its last reset, including full input and cache tokens. The automated context tests check prompt sections and transitions, not provider token counts or generated answers.
+After `/reload`, start a **new session** to evaluate greeting context: existing conversations retain earlier instructions and tool output. Codemode is disabled; `tool_search` loads native, custom and MCP tools on demand without scripts. The inert `codemode.mode: "on"` setting also avoids hiding standard tools if codemode is explicitly re-enabled later. The always-loaded prompt is kept compact; verify recorded provider usage after a fresh `hi` with the same model and configuration. No fixed token total is guaranteed: base instructions, skill descriptions, tools and MCP configuration also contribute. The custom footer sums recorded provider usage since its last reset, including full input and cache tokens. The automated context tests check prompt sections and transitions, not provider token counts or generated answers.
+
+## MCP on Windows and macOS
+
+`.pi/mcp.json` uses two small platform adapters, without new npm dependencies:
+
+- `scripts/lightpanda-mcp.mjs`: keeps `~/.local/bin/lightpanda` on macOS/Linux; Windows uses the official Lightpanda 1.0.4 Docker image pinned by digest. Docker Desktop must be running. The container uses stdio, publishes no ports, mounts no host files and disables telemetry. The existing private-network restrictions and robots policy remain enabled. **On Windows, `127.0.0.1` inside Lightpanda is the container, not the Windows host**; local Windows application flows need separate, explicitly scoped networking setup.
+- `scripts/zap-mcp-key.mjs`: reads the local ZAP MCP key using PowerShell's XML reader on Windows or Python's ElementTree on macOS/Linux. Config locations are `~/ZAP/config.xml`, `~/Library/Application Support/ZAP/config.xml` and `~/.ZAP/config.xml`, respectively. The key is passed only to Pi's Authorization-header resolver, never stored in this repository. Do not run the helper directly in a shared terminal: its stdout is the key.
+
+Playwright uses the already-installed Google Chrome through `browser.launchOptions.channel: "chrome"` in `.pi/playwright-mcp.json`; it does not require a separate Playwright Chromium download. Chrome must be installed on each host using this shared configuration. It opens a separate visible browser with an isolated in-memory profile, without importing personal cookies, logins or browser tabs. The pinned MCP package and disabled `oomagent-pi` bridge are unchanged. Mac installations still require their existing native Lightpanda, Python 3 and running ZAP with MCP enabled; no Mac runtime was available for verification.
+
+### Windows setup and restart
+
+The verified installation uses [official Lightpanda Docker images](https://github.com/lightpanda-io/browser), [Temurin JRE 17.0.21+9](https://github.com/adoptium/temurin17-binaries/releases/tag/jdk-17.0.21%2B9) and [ZAP 2.17.0 Crossplatform](https://github.com/zaproxy/zaproxy/releases/tag/v2.17.0). The portable Java and ZAP ZIPs were SHA-256 verified and extracted below `%LOCALAPPDATA%/OomAgent`, without changing system PATH or requiring administrator rights. ZAP's `-cmd -addoninstall mcp` installed MCP 0.4.0 and its required add-ons.
+
+Install the pinned Lightpanda image once (the launcher deliberately never pulls implicitly):
+
+```sh
+docker pull lightpanda/browser@sha256:a9d899882899802bc3a6b82622a7ca394f8e1b828452869a0965d2e5097e6116
+```
+
+After a restart, start Docker Desktop and ZAP. If local PowerShell scripts are allowed, `powershell -NoProfile -File scripts/start-zap-windows.ps1` starts the portable ZAP in the background, with logs under `%LOCALAPPDATA%/OomAgent/logs`. It refuses to start if either listener port is already occupied. Stop that instance using its reported PID when no longer needed; no Windows startup task or service is installed.
+
+If PowerShell blocks script files, leave the execution policy unchanged. ZAP also supports a direct Java command in a separate PowerShell terminal (keep it open; Ctrl+C stops ZAP):
+
+```powershell
+$base = Join-Path $env:LOCALAPPDATA 'OomAgent'
+& "$base\java-17.0.21\jdk-17.0.21+9-jre\bin\java.exe" -jar "$base\zap-2.17.0\ZAP_2.17.0\zap-2.17.0.jar" -daemon -silent -host 127.0.0.1 -port 18080 -config mcp.enabled=true -config mcp.port=8282 -config mcp.securityKeyEnabled=true -config mcp.secureOnly=false -config mcp.recordInHistory=false
+```
+
+ZAP listens only on loopback: MCP on `127.0.0.1:8282`, proxy on `127.0.0.1:18080`. The MCP endpoint retains the existing local HTTP transport with authentication required; never forward or expose these ports. No targets, scans, system proxy changes or certificate installation are part of startup. The portable install does not include Firefox; Firefox-dependent ZAP browser flows need separate setup and are not verified here.
+
+Run `pi mcp list`, then `/reload` inside an existing Pi session. Use `/mcp` to inspect or reconnect servers. Regression checks: `node --test tests/mcp-config.test.mjs tests/mcp-platform.test.mjs tests/playwright-mcp.test.mjs`. These tests do not install software, start Docker/ZAP or scan any target.
 
 ## Shared prompt templates
 
@@ -120,7 +152,7 @@ Run the current staged checks without committing:
 node scripts/git-preflight.mjs pre-commit
 ```
 
-Requirements: Git, `tar`, a recent Node.js with `stripTypeScriptTypes` support for the existing tests, and the project's already-installed dependencies. No dependencies are installed by the gate. Dependencies are reused from the working tree; lockfile/version consistency is not independently verified. Tests execute trusted repository code with your OS permissions: the temporary snapshot is not a sandbox, and dependency files are shared. Git archive export attributes apply to the snapshot. Only top-level `tests/*.test.{ts,js,mjs,cjs}` and `tests/*.spec.{ts,js,mjs,cjs}` are selected.
+Requirements: Git, `tar`, a recent Node.js with `stripTypeScriptTypes` support for the existing tests, and the project's already-installed dependencies. On Windows the gate selects the system `tar.exe` (Git Bash's GNU tar misinterprets drive letters) and uses a directory junction to reuse snapshot dependencies. No dependencies are installed by the gate. Dependencies are reused from the working tree; lockfile/version consistency is not independently verified. Tests execute trusted repository code with your OS permissions: the temporary snapshot is not a sandbox, and dependency files are shared. Git archive export attributes apply to the snapshot. Only top-level `tests/*.test.{ts,js,mjs,cjs}` and `tests/*.spec.{ts,js,mjs,cjs}` are selected.
 
 Local hooks can be bypassed (for example with `--no-verify`) and do not provide server-side enforcement. Use CI and branch protection for a hard guarantee. Existing local hooks must be integrated rather than overwritten if installing this setup elsewhere.
 
@@ -129,6 +161,14 @@ To undo this repository's hook activation (no previous custom hooks path was con
 ```bash
 git config --local --unset core.hooksPath
 ```
+
+## Cross-platform test setup
+
+Run the complete top-level suite with `node --test tests/*.test.mjs tests/*.test.ts`. The Pi peers must resolve from this project; a global installation alone does not satisfy Node's bare imports. This Windows checkout reuses its already-installed `pi-coding-agent`, `pi-ai` and `pi-tui` through local directory junctions under ignored `node_modules/@earendil-works/`. No packages or global settings were changed. On another machine, use existing project dependencies or explicitly approve their installation first. `PI_TEST_HOST` can select an existing host for SDK tests, but does not replace dependency resolution for all tests.
+
+Tests use Node's runner and Pi's existing Jiti loader, including on Node 26. Directory-link security checks use real Windows junctions. File-symlink tests probe OS support and report explicit skips if privileges are unavailable; no elevation or Developer Mode change is attempted. POSIX permission-bit tests are also explicitly skipped on Windows; injected directory-read errors are still tested on every platform. These skips are limitations, not successful checks of those OS features. Unix-only filenames also retain parser/sanitization coverage without creating invalid Windows filenames.
+
+The append prompt is a regular file in Git, not a symlink placeholder. Its full safety/persona contents must match `.pi/system-prompt.md` on every platform. The Git gate still scans secrets, validates whitespace and tests the exact staged/outgoing snapshot; no checks are bypassed.
 
 ## Offline split-pane UI prototype
 

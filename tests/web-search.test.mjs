@@ -8,7 +8,7 @@ import { readFile } from "node:fs/promises";
 const deps = {};
 globalThis.__webSearchTest = deps;
 const source = (await readFile(new URL("../.pi/extensions/web-search.ts", import.meta.url), "utf8"))
-  .replace(/^import .*;\n/gm, "")
+  .replace(/^import .*;\r?\n/gm, "")
   .replace("const keychainCommand = promisify(execFile);", "");
 const prelude = `
 const deps = globalThis.__webSearchTest;
