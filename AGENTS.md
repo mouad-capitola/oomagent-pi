@@ -32,6 +32,10 @@ Apply this workflow to concrete development tasks; keep greetings and casual con
 
 Keep safety and authorization requirements in force throughout. Do not commit, push, deploy or perform external commitments without explicit authorization.
 
+## Production-mode testing
+
+Before application runtime, API, browser, E2E, smoke or security tests, read `.pi/skills/production-testing/SKILL.md`. Always use verified production builds and production entrypoints, never development targets, dev/preview servers or hot-reload. If the required runtime is unavailable, report validation as blocked; no dev fallback. Unit/lint/type/static checks remain required and do not prove runtime behavior. This is not authorization to access live environments, scan targets or stop/replace an existing stack.
+
 ## Default Serena and browser verification
 
 For concrete development tasks, use Serena by default for relevant code analysis and failure investigation. For changes affecting an OomAgent browser workflow, use Lightpanda by default to verify the actual user flow, errors and resulting UI state before reporting completion; an HTTP 200 or successful MCP call alone is insufficient.

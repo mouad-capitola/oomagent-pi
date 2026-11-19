@@ -67,6 +67,14 @@ The [`libraries-first` skill](.pi/skills/libraries-first/SKILL.md) applies to te
 
 Run `/reload` to discover it; `/skill:libraries-first [task]` loads it explicitly. Automatic skill selection is model-driven, not guaranteed. `node --test tests/skills.test.mjs` checks discovery and required instruction text, not model compliance.
 
+## Production-mode testing
+
+The [`production-testing` skill](.pi/skills/production-testing/SKILL.md) requires production builds and verified production entrypoints before application/API/browser/E2E/smoke/security tests. No development targets, dev/preview servers, hot-reload or dev fallback: unavailable production runtime means blocked validation. Local production-mode testing is not permission to access live/customer environments, scan targets or replace a running stack. Unit/lint/type/static checks remain required but do not replace runtime verification.
+
+Run `/reload`, then `/skill:production-testing` to load it explicitly. The repository instructions and `frontend-qa` skill refer to this rule. It is self-contained in this package and deliberately has a different name from the OomAgent application's `production-mode-testing` skill, so both registered skill collections can coexist without a name collision. No global settings change is needed for an already registered collection.
+
+`node --test tests/skills.test.mjs` checks Pi discovery, instruction text and references, not automatic model compliance or an application's runtime mode. This skill is an instruction, not an executable security gate.
+
 ## Shared agent-delivery skills
 
 Run `/reload` after changes. Pi loads these skills when the task matches their descriptions; invoke them explicitly when needed:

@@ -7,6 +7,8 @@ description: Test frontend flows en UI gedrag met Lightpanda en gebruik Serena b
 
 Gebruik deze skill wanneer een webinterface, formulier of gebruikersflow getest moet worden.
 
+Lees vóór browserverkeer [production-testing](../production-testing/SKILL.md) en controleer de productie-build en effectieve runtime van de frontend én de aangeroepen API. Geen dev-/previewserver of hot-reload. Ontbreekt de juiste runtime, meld de test als geblokkeerd; geen dev-fallback en geen bestaande stack zonder toestemming omschakelen.
+
 ## Werkwijze
 
 1. Open de applicatie met Lightpanda.
